@@ -1,0 +1,31 @@
+[project]
+name = "redis-gtfs-rt-api"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi[standard]",
+    "sqlmodel",
+    "sqladmin[full]",
+    "asyncpg",
+    "alembic",
+    "redis[asyncio]",
+    "pydantic-settings",
+]
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest",
+    "pytest-asyncio",
+    "httpx",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
