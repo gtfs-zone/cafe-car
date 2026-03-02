@@ -71,7 +71,6 @@ services:
       migrate:
         condition: service_completed_successfully
 
-
 volumes:
   db_data:
   redis_data:

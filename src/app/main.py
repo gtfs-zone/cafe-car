@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from app.database import get_engine
 from app.routers.gtfs_rt import router as gtfs_rt_router
+from app.routers.mqtt_auth import router as mqtt_auth_router
 from app.settings import get_settings
 
 
@@ -30,6 +31,7 @@ def create_public_app() -> FastAPI:
     )
 
     app.include_router(gtfs_rt_router)
+    app.include_router(mqtt_auth_router)
 
     return app
 
