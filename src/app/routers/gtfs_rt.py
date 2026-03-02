@@ -45,16 +45,13 @@ async def vehicle_positions(
     from app.models.driver import Driver
 
     result = await session.exec(select(Driver).where(Driver.feed_id == feed.id))
-    valid_drivers = {d.username for d in result.all()}
+    drivers = result.all()
 
     redis = request.app.state.redis
-    pattern = f"vehicle:{feed.feed_name}:*"
 
     entity_id = 0
-    async for key in redis.scan_iter(pattern):
-        driver_username = key.decode().split(":")[-1]
-        if driver_username not in valid_drivers:
-            continue
+    for driver in drivers:
+        key = f"vehicle:{driver.username}"
         raw = await redis.get(key)
         if raw is None:
             continue
@@ -70,7 +67,8 @@ async def vehicle_positions(
         entity.vehicle.position.bearing = data["bearing"]
         entity.vehicle.position.speed = data["speed"]
         entity.vehicle.trip.trip_id = data["trip_id"]
-        entity.vehicle.trip.route_id = data["route_id"]
+        if route_id := data.get("route_id"):
+            entity.vehicle.trip.route_id = route_id
         entity.vehicle.current_status = gtfs_realtime_pb2.VehiclePosition.IN_TRANSIT_TO
         entity.vehicle.timestamp = data["timestamp"]
 
