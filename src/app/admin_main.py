@@ -1,3 +1,4 @@
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -18,6 +19,23 @@ class DBSessionMiddleware(BaseHTTPMiddleware):
         async with get_session_factory()() as session:
             request.state.session = session
             return await call_next(request)
+
+
+class DevAuthMiddleware(BaseHTTPMiddleware):
+    """Injects fake oauth2-proxy headers for local development (DEV_AUTH_USER set)."""
+
+    def __init__(self, app, user: str, email: str) -> None:
+        super().__init__(app)
+        self.user = user.encode()
+        self.email = email.encode()
+
+    async def dispatch(self, request: Request, call_next):
+        request.scope["headers"] = [
+            *request.scope["headers"],
+            (b"x-auth-request-user", self.user),
+            (b"x-auth-request-email", self.email),
+        ]
+        return await call_next(request)
 
 
 @asynccontextmanager
@@ -43,6 +61,11 @@ def create_admin_app() -> FastAPI:
 
     app.add_middleware(DBSessionMiddleware)
     app.add_middleware(SessionMiddleware, secret_key=settings.session_secret_key)
+
+    dev_user = os.getenv("DEV_AUTH_USER")
+    if dev_user:
+        dev_email = os.getenv("DEV_AUTH_EMAIL", f"{dev_user}@local")
+        app.add_middleware(DevAuthMiddleware, user=dev_user, email=dev_email)
 
     auth_backend = OIDCAuthBackend(secret_key=settings.session_secret_key)
     admin = Admin(app, engine=get_engine(), authentication_backend=auth_backend)

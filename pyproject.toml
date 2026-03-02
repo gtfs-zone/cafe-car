@@ -10,6 +10,7 @@ dependencies = [
     "alembic",
     "redis[asyncio]",
     "pydantic-settings",
+    "gtfs-realtime-bindings>=2.0.0",
 ]
 
 [dependency-groups]
