@@ -2,14 +2,22 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from sqladmin import Admin
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.admin.auth import OIDCAuthBackend
 from app.admin.views import DriverAdmin, FeedAdmin
-from app.database import get_engine
+from app.database import get_engine, get_session_factory
 from app.settings import get_settings
+
+
+class DBSessionMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        async with get_session_factory()() as session:
+            request.state.session = session
+            return await call_next(request)
 
 
 @asynccontextmanager
@@ -33,6 +41,7 @@ def create_admin_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    app.add_middleware(DBSessionMiddleware)
     app.add_middleware(SessionMiddleware, secret_key=settings.session_secret_key)
 
     auth_backend = OIDCAuthBackend(secret_key=settings.session_secret_key)

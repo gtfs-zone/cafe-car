@@ -94,15 +94,17 @@ class DriverAdmin(ModelView, model=Driver):
     async def insert_model(self, request: Request, data: dict) -> Driver:
         subject = _current_subject(request)
         session: AsyncSession = request.state.session
-        feed_id = data.get("feed_id")
+        feed_raw = data.get("feed")
+        if not feed_raw:
+            raise ValueError("A feed must be selected")
+        feed_id = feed_raw.id if hasattr(feed_raw, "id") else int(feed_raw)
         result = await session.execute(
             select(Feed)
             .join(User, Feed.owner_id == User.id)
             .where(User.provider_subject == subject)
-            .where(Feed.id == int(feed_id))
+            .where(Feed.id == feed_id)
         )
-        feed = result.scalar_one_or_none()
-        if feed is None:
+        if result.scalar_one_or_none() is None:
             raise PermissionError("Feed not found or access denied")
         return await super().insert_model(request, data)
 
