@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     database_url: PostgresDsn
     redis_url: RedisDsn
     session_secret_key: str
+    oidc_provider: str = "dex"
 
     model_config = SettingsConfigDict(env_file=".env")
 

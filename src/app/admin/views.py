@@ -10,8 +10,8 @@ from app.models.feed import Feed
 from app.models.user import User
 
 
-def _current_username(request: Request) -> str:
-    return request.session.get("user", "")
+def _current_subject(request: Request) -> str:
+    return request.session.get("subject", "")
 
 
 class FeedAdmin(ModelView, model=Feed):
@@ -20,11 +20,11 @@ class FeedAdmin(ModelView, model=Feed):
     name = "Feed"
     name_plural = "Feeds"
 
-    def _base_query(self, username: str):
+    def _base_query(self, subject: str):
         return (
             select(Feed)
             .join(User, Feed.owner_id == User.id)
-            .where(User.username == username)
+            .where(User.provider_subject == subject)
         )
 
     async def get_list_query(self):
@@ -40,16 +40,16 @@ class FeedAdmin(ModelView, model=Feed):
         *args: Any,
         **kwargs: Any,
     ):
-        username = _current_username(request)
+        subject = _current_subject(request)
         session: AsyncSession = kwargs.get("session") or request.state.session
-        result = await session.execute(self._base_query(username))
+        result = await session.execute(self._base_query(subject))
         return result.scalars().all()
 
     async def insert_model(self, request: Request, data: dict) -> Feed:
-        username = _current_username(request)
+        subject = _current_subject(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
-            select(User).where(User.username == username)
+            select(User).where(User.provider_subject == subject)
         )
         owner = result.scalar_one_or_none()
         if owner is None:
@@ -58,10 +58,10 @@ class FeedAdmin(ModelView, model=Feed):
         return await super().insert_model(request, data)
 
     async def _get_owned_feed(self, request: Request, pk: Any) -> Feed:
-        username = _current_username(request)
+        subject = _current_subject(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
-            self._base_query(username).where(Feed.id == int(pk))
+            self._base_query(subject).where(Feed.id == int(pk))
         )
         feed = result.scalar_one_or_none()
         if feed is None:
@@ -83,22 +83,22 @@ class DriverAdmin(ModelView, model=Driver):
     name = "Driver"
     name_plural = "Drivers"
 
-    def _base_query(self, username: str):
+    def _base_query(self, subject: str):
         return (
             select(Driver)
             .join(Feed, Driver.feed_id == Feed.id)
             .join(User, Feed.owner_id == User.id)
-            .where(User.username == username)
+            .where(User.provider_subject == subject)
         )
 
     async def insert_model(self, request: Request, data: dict) -> Driver:
-        username = _current_username(request)
+        subject = _current_subject(request)
         session: AsyncSession = request.state.session
         feed_id = data.get("feed_id")
         result = await session.execute(
             select(Feed)
             .join(User, Feed.owner_id == User.id)
-            .where(User.username == username)
+            .where(User.provider_subject == subject)
             .where(Feed.id == int(feed_id))
         )
         feed = result.scalar_one_or_none()
@@ -107,10 +107,10 @@ class DriverAdmin(ModelView, model=Driver):
         return await super().insert_model(request, data)
 
     async def _get_owned_driver(self, request: Request, pk: Any) -> Driver:
-        username = _current_username(request)
+        subject = _current_subject(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
-            self._base_query(username).where(Driver.id == int(pk))
+            self._base_query(subject).where(Driver.id == int(pk))
         )
         driver = result.scalar_one_or_none()
         if driver is None:

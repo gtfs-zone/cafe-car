@@ -10,4 +10,5 @@ COPY src/ ./src/
 COPY alembic/ ./alembic/
 COPY alembic.ini ./
 ENV PATH="/app/.venv/bin:$PATH"
+EXPOSE 8000
 CMD ["fastapi", "run", "src/app/main.py", "--port", "8000"]

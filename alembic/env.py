@@ -17,9 +17,10 @@ target_metadata = SQLModel.metadata
 
 
 def get_url() -> str:
+    from app.database import _asyncpg_url
     from app.settings import get_settings
 
-    return str(get_settings().database_url)
+    return _asyncpg_url(str(get_settings().database_url))
 
 
 def run_migrations_offline() -> None:
