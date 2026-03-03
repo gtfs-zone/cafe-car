@@ -1,6 +1,7 @@
 from sqladmin.authentication import AuthenticationBackend
 from sqlmodel import select
 from starlette.requests import Request
+from starlette.responses import RedirectResponse
 
 from app.database import get_session_factory
 from app.models.user import User
@@ -11,9 +12,10 @@ class OIDCAuthBackend(AuthenticationBackend):
     async def login(self, request: Request) -> bool:
         return True  # Traefik/oauth2-proxy handles login redirect
 
-    async def logout(self, request: Request) -> bool:
+    async def logout(self, request: Request) -> RedirectResponse:
         request.session.clear()
-        return True
+        logout_url = get_settings().oauth2_proxy_logout_url
+        return RedirectResponse(url=logout_url)
 
     async def authenticate(self, request: Request) -> bool:
         subject = request.headers.get("X-Auth-Request-User") or request.headers.get("X-Forwarded-User")

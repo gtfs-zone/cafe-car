@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     redis_url: RedisDsn
     session_secret_key: str
     oidc_provider: str = "dex"
+    oauth2_proxy_logout_url: str = "/oauth2/sign_out"
 
     model_config = SettingsConfigDict(env_file=".env")
 
