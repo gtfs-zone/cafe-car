@@ -68,7 +68,7 @@ def create_admin_app() -> FastAPI:
         app.add_middleware(DevAuthMiddleware, user=dev_user, email=dev_email)
 
     auth_backend = OIDCAuthBackend(secret_key=settings.session_secret_key)
-    admin = Admin(app, engine=get_engine(), authentication_backend=auth_backend)
+    admin = Admin(app, engine=get_engine(), authentication_backend=auth_backend, base_url="/")
     admin.add_view(FeedAdmin)
     admin.add_view(DriverAdmin)
 
