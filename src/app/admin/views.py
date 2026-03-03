@@ -1,5 +1,6 @@
 from typing import Any
 
+from markupsafe import Markup
 from sqladmin import ModelView
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +18,10 @@ def _current_subject(request: Request) -> str:
 
 
 class FeedAdmin(ModelView, model=Feed):
-    column_list = [Feed.id, Feed.feed_name, Feed.static_feed_url]
+    column_list = [Feed.feed_name, Feed.static_feed_url]
+    column_formatters = {
+        Feed.feed_name: lambda m, a: Markup(f'<a href="/feed/edit/{m.id}">{m.feed_name}</a>'),
+    }
     column_searchable_list = [Feed.feed_name]
     form_excluded_columns = ["owner", "drivers", "owner_id"]
     name = "Feed"
@@ -82,7 +86,10 @@ class FeedAdmin(ModelView, model=Feed):
 
 
 class DriverAdmin(ModelView, model=Driver):
-    column_list = [Driver.id, Driver.username, "feed"]
+    column_list = [Driver.username, "feed"]
+    column_formatters = {
+        Driver.username: lambda m, a: Markup(f'<a href="/driver/edit/{m.id}">{m.username}</a>'),
+    }
     column_searchable_list = [Driver.username]
     form_excluded_columns = ["feed"]
     name = "Driver"
