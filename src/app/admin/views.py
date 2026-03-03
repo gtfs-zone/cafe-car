@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 from wtforms import SelectField
+from wtforms.validators import URL, Length, Regexp
 
 from app.admin.context import current_subject_var
 from app.models.driver import Driver
@@ -18,6 +19,20 @@ def _current_subject(request: Request) -> str:
 
 
 class FeedAdmin(ModelView, model=Feed):
+    form_args = {
+        "feed_name": {
+            "validators": [
+                Length(min=3, max=64, message="feed_name must be 3–64 characters"),
+                Regexp(
+                    r"^[a-z][a-z0-9_-]*$",
+                    message="Must start with [a-z], then [a-z0-9_-] only",
+                ),
+            ]
+        },
+        "static_feed_url": {
+            "validators": [URL(message="Must be a valid http or https URL")]
+        },
+    }
     column_list = [Feed.feed_name, Feed.static_feed_url]
     column_formatters = {
         Feed.feed_name: lambda m, a: Markup(f'<a href="/feed/edit/{m.id}">{m.feed_name}</a>'),
@@ -86,6 +101,20 @@ class FeedAdmin(ModelView, model=Feed):
 
 
 class DriverAdmin(ModelView, model=Driver):
+    form_args = {
+        "username": {
+            "validators": [
+                Length(min=3, max=32, message="username must be 3–32 characters"),
+                Regexp(r"^[a-zA-Z0-9]+$", message="username must be alphanumeric only"),
+            ]
+        },
+        "password": {
+            "validators": [
+                Length(min=3, max=32, message="password must be 3–32 characters"),
+                Regexp(r"^[a-zA-Z0-9]+$", message="password must be alphanumeric only"),
+            ]
+        },
+    }
     column_list = [Driver.username, "feed"]
     column_formatters = {
         Driver.username: lambda m, a: Markup(f'<a href="/driver/edit/{m.id}">{m.username}</a>'),

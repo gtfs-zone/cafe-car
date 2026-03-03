@@ -34,17 +34,21 @@ class OIDCAuthBackend(AuthenticationBackend):
                         User.provider_subject == subject,
                     )
                 )
+                email = request.headers.get("X-Auth-Request-Email") or None
                 if not user:
                     print(f"[AUTH] creating new user subject={subject!r}", flush=True)
                     user = User(
                         provider=settings.oidc_provider,
                         provider_subject=subject,
-                        email=request.headers.get("X-Auth-Request-Email"),
+                        email=email,
                     )
                     session.add(user)
                     await session.commit()
                 else:
                     print(f"[AUTH] existing user id={user.id} subject={subject!r}", flush=True)
+                    if email and user.email != email:
+                        user.email = email
+                        await session.commit()
         except Exception as e:
             print(f"[AUTH] EXCEPTION during DB lookup for subject={subject!r}: {e!r}", flush=True)
             raise
