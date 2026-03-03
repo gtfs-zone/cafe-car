@@ -17,3 +17,9 @@ class User(SQLModel, table=True):
     display_name: str | None = None
 
     feeds: list["Feed"] = Relationship(back_populates="owner")
+
+    def __str__(self) -> str:
+        return self.display_name or self.provider_subject
+
+    def __repr__(self) -> str:
+        return f"User(id={self.id}, provider_subject={self.provider_subject!r})"

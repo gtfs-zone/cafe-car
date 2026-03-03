@@ -16,7 +16,7 @@ class OIDCAuthBackend(AuthenticationBackend):
         return True
 
     async def authenticate(self, request: Request) -> bool:
-        subject = request.headers.get("X-Auth-Request-User")
+        subject = request.headers.get("X-Auth-Request-User") or request.headers.get("X-Forwarded-User")
         x_headers = {k: v for k, v in request.headers.items() if k.lower().startswith("x-")}
         print(f"[AUTH] authenticate called: path={request.url.path!r} subject={subject!r} x_headers={x_headers!r}", flush=True)
         if not subject:

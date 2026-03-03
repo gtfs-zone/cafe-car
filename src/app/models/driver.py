@@ -13,3 +13,9 @@ class Driver(SQLModel, table=True):
     feed_id: int = Field(foreign_key="feed.id")
 
     feed: "Feed" = Relationship(back_populates="drivers")
+
+    def __str__(self) -> str:
+        return self.username
+
+    def __repr__(self) -> str:
+        return f"Driver(id={self.id}, username={self.username!r})"

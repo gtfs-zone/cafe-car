@@ -4,7 +4,9 @@ from sqladmin import ModelView
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
+from wtforms import SelectField
 
+from app.admin.context import current_subject_var
 from app.models.driver import Driver
 from app.models.feed import Feed
 from app.models.user import User
@@ -15,8 +17,9 @@ def _current_subject(request: Request) -> str:
 
 
 class FeedAdmin(ModelView, model=Feed):
-    column_list = [Feed.id, Feed.feed_name, Feed.static_feed_url, Feed.owner_id]
+    column_list = [Feed.id, Feed.feed_name, Feed.static_feed_url]
     column_searchable_list = [Feed.feed_name]
+    form_excluded_columns = ["owner", "drivers", "owner_id"]
     name = "Feed"
     name_plural = "Feeds"
 
@@ -27,23 +30,24 @@ class FeedAdmin(ModelView, model=Feed):
             .where(User.provider_subject == subject)
         )
 
-    async def get_list_query(self):
-        # Overridden per-request in list method; return base select
-        return select(Feed)
+    def list_query(self, request: Request):
+        return self._base_query(_current_subject(request))
 
-    async def get_count_query(self):
-        return select(func.count()).select_from(Feed)
-
-    async def scaffold_list(
-        self,
-        request: Request,
-        *args: Any,
-        **kwargs: Any,
-    ):
+    def count_query(self, request: Request):
         subject = _current_subject(request)
-        session: AsyncSession = kwargs.get("session") or request.state.session
-        result = await session.execute(self._base_query(subject))
-        return result.scalars().all()
+        return (
+            select(func.count(Feed.id))
+            .join(User, Feed.owner_id == User.id)
+            .where(User.provider_subject == subject)
+        )
+
+    def details_query(self, request: Request):
+        pk = request.path_params["pk"]
+        return self._base_query(_current_subject(request)).where(Feed.id == int(pk))
+
+    def form_edit_query(self, request: Request):
+        pk = request.path_params["pk"]
+        return self._base_query(_current_subject(request)).where(Feed.id == int(pk))
 
     async def insert_model(self, request: Request, data: dict) -> Feed:
         subject = _current_subject(request)
@@ -78,10 +82,28 @@ class FeedAdmin(ModelView, model=Feed):
 
 
 class DriverAdmin(ModelView, model=Driver):
-    column_list = [Driver.id, Driver.username, Driver.feed_id]
+    column_list = [Driver.id, Driver.username, "feed"]
     column_searchable_list = [Driver.username]
+    form_excluded_columns = ["feed"]
     name = "Driver"
     name_plural = "Drivers"
+
+    async def scaffold_form(self, rules=None):
+        Form = await super().scaffold_form(rules)
+        subject = current_subject_var.get()
+        async with self.session_maker() as session:
+            result = await session.execute(
+                select(Feed)
+                .join(User, Feed.owner_id == User.id)
+                .where(User.provider_subject == subject)
+            )
+            feeds = result.scalars().all()
+        Form.feed_id = SelectField(
+            "Feed Name",
+            choices=[(f.id, f.feed_name) for f in feeds],
+            coerce=int,
+        )
+        return Form
 
     def _base_query(self, subject: str):
         return (
@@ -91,13 +113,32 @@ class DriverAdmin(ModelView, model=Driver):
             .where(User.provider_subject == subject)
         )
 
+    def list_query(self, request: Request):
+        return self._base_query(_current_subject(request))
+
+    def count_query(self, request: Request):
+        subject = _current_subject(request)
+        return (
+            select(func.count(Driver.id))
+            .join(Feed, Driver.feed_id == Feed.id)
+            .join(User, Feed.owner_id == User.id)
+            .where(User.provider_subject == subject)
+        )
+
+    def details_query(self, request: Request):
+        pk = request.path_params["pk"]
+        return self._base_query(_current_subject(request)).where(Driver.id == int(pk))
+
+    def form_edit_query(self, request: Request):
+        pk = request.path_params["pk"]
+        return self._base_query(_current_subject(request)).where(Driver.id == int(pk))
+
     async def insert_model(self, request: Request, data: dict) -> Driver:
         subject = _current_subject(request)
         session: AsyncSession = request.state.session
-        feed_raw = data.get("feed")
-        if not feed_raw:
+        feed_id = data.get("feed_id")
+        if not feed_id:
             raise ValueError("A feed must be selected")
-        feed_id = feed_raw.id if hasattr(feed_raw, "id") else int(feed_raw)
         result = await session.execute(
             select(Feed)
             .join(User, Feed.owner_id == User.id)

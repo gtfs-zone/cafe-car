@@ -15,3 +15,9 @@ class Feed(SQLModel, table=True):
 
     owner: "User" = Relationship(back_populates="feeds")
     drivers: list["Driver"] = Relationship(back_populates="feed")
+
+    def __str__(self) -> str:
+        return self.feed_name
+
+    def __repr__(self) -> str:
+        return f"Feed(id={self.id}, feed_name={self.feed_name!r})"

@@ -55,14 +55,10 @@ services:
     build: .
     restart: on-failure
     command: fastapi run src/app/admin_main.py --port 8001
-    ports:
-      - "8001:8001"
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:mysecretpassword@db:5432/postgres
       REDIS_URL: redis://redis:6379/1
       SESSION_SECRET_KEY: dev-secret-key
-      DEV_AUTH_USER: devuser
-      DEV_AUTH_EMAIL: dev@local
     depends_on:
       db:
         condition: service_healthy
@@ -70,6 +66,37 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+
+  dex:
+    image: ghcr.io/dexidp/dex:v2.45.0
+    volumes:
+      - ./dev/dex/config.yaml:/etc/dex/config.yaml:ro
+    command: dex serve /etc/dex/config.yaml
+    ports:
+      - "5556:5556"
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.14.3
+    ports:
+      - "4180:4180"
+    environment:
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_OIDC_ISSUER_URL: http://dex:5556
+      OAUTH2_PROXY_CLIENT_ID: oauth2-proxy
+      OAUTH2_PROXY_CLIENT_SECRET: dev-oauth2-proxy-secret
+      OAUTH2_PROXY_COOKIE_SECRET: ZGV2LWxvY2FsLWNvb2tpZS1zZWNyZXQtMzItYnl0ZXM=
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_REDIRECT_URL: http://localhost:4180/oauth2/callback
+      OAUTH2_PROXY_UPSTREAMS: http://admin:8001/
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      OAUTH2_PROXY_PASS_ACCESS_TOKEN: "true"
+      OAUTH2_PROXY_PREFER_EMAIL_TO_USER: "false"
+      OAUTH2_PROXY_USER_ID_CLAIM: name
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+    depends_on:
+      - dex
+      - admin
 
 volumes:
   db_data:
