@@ -2,9 +2,10 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from sqlalchemy import text
 
-from app.database import get_engine
+from app.database import get_engine, get_session_factory
 from app.routers.gtfs_rt import router as gtfs_rt_router
 from app.routers.mqtt_auth import router as mqtt_auth_router
 from app.settings import get_settings
@@ -32,6 +33,14 @@ def create_public_app() -> FastAPI:
 
     app.include_router(gtfs_rt_router)
     app.include_router(mqtt_auth_router)
+
+    @app.get("/health")
+    async def health(request: Request):
+        redis: aioredis.Redis = request.app.state.redis
+        await redis.ping()
+        async with get_session_factory()() as session:
+            await session.execute(text("SELECT 1"))
+        return {"status": "ok"}
 
     return app
 
