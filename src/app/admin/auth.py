@@ -88,4 +88,8 @@ class OIDCAuthBackend(AuthenticationBackend):
             raise
         request.session.clear()
         request.session["subject"] = subject
+        if user.display_name:
+            request.session["display_name"] = user.display_name
+        if user.email:
+            request.session["email"] = user.email
         return True

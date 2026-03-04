@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI, Request
@@ -53,7 +54,8 @@ def create_admin_app() -> FastAPI:
     app.add_middleware(SessionMiddleware, secret_key=settings.session_secret_key)
 
     auth_backend = OIDCAuthBackend(secret_key=settings.session_secret_key)
-    admin = Admin(app, engine=get_engine(), authentication_backend=auth_backend, base_url="/")
+    templates_dir = str(Path(__file__).parent / "admin" / "templates")
+    admin = Admin(app, engine=get_engine(), authentication_backend=auth_backend, base_url="/", templates_dir=templates_dir)
     admin.add_view(FeedAdmin)
     admin.add_view(DriverAdmin)
 
