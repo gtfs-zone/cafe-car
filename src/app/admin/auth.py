@@ -1,3 +1,7 @@
+import base64
+import json
+import logging
+
 from sqladmin.authentication import AuthenticationBackend
 from sqlmodel import select
 from starlette.requests import Request
@@ -6,6 +10,18 @@ from starlette.responses import RedirectResponse
 from app.database import get_session_factory
 from app.models.user import User
 from app.settings import get_settings
+
+logger = logging.getLogger(__name__)
+
+
+def _decode_jwt_claims(token: str) -> dict:
+    """Decode JWT payload without verification (token already verified by oauth2-proxy)."""
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)  # fix padding
+        return json.loads(base64.urlsafe_b64decode(payload))
+    except Exception:
+        return {}
 
 
 class OIDCAuthBackend(AuthenticationBackend):
@@ -19,10 +35,8 @@ class OIDCAuthBackend(AuthenticationBackend):
 
     async def authenticate(self, request: Request) -> bool:
         subject = request.headers.get("X-Auth-Request-User") or request.headers.get("X-Forwarded-User")
-        x_headers = {k: v for k, v in request.headers.items() if k.lower().startswith("x-")}
-        print(f"[AUTH] authenticate called: path={request.url.path!r} subject={subject!r} x_headers={x_headers!r}", flush=True)
         if not subject:
-            print("[AUTH] no X-Auth-Request-User header — returning False", flush=True)
+            logger.warning("authenticate: no subject header for path=%s", request.url.path)
             return False
         try:
             settings = get_settings()
@@ -34,23 +48,37 @@ class OIDCAuthBackend(AuthenticationBackend):
                         User.provider_subject == subject,
                     )
                 )
-                email = request.headers.get("X-Auth-Request-Email") or None
+                token = request.headers.get("X-Auth-Request-Access-Token")
+                claims = _decode_jwt_claims(token) if token else {}
+                # Only use JWT claims if the token's subject matches to avoid
+                # trusting claims from a mismatched or injected token.
+                claims = claims if claims.get("sub") == subject else {}
+                email = claims.get("email") or request.headers.get("X-Auth-Request-Email") or None
+                display_name = (claims.get("name") or "")[:128].strip() or None
                 if not user:
-                    print(f"[AUTH] creating new user subject={subject!r}", flush=True)
+                    logger.info("authenticate: creating new user subject=%s", subject)
                     user = User(
                         provider=settings.oidc_provider,
                         provider_subject=subject,
                         email=email,
+                        display_name=display_name,
                     )
                     session.add(user)
                     await session.commit()
                 else:
-                    print(f"[AUTH] existing user id={user.id} subject={subject!r}", flush=True)
+                    dirty = False
                     if email and user.email != email:
                         user.email = email
+                        dirty = True
+                    if display_name and user.display_name != display_name:
+                        user.display_name = display_name
+                        dirty = True
+                    if dirty:
+                        logger.info("authenticate: updated profile for user id=%s", user.id)
                         await session.commit()
-        except Exception as e:
-            print(f"[AUTH] EXCEPTION during DB lookup for subject={subject!r}: {e!r}", flush=True)
+        except Exception:
+            logger.exception("authenticate: DB error for subject=%s", subject)
             raise
+        request.session.clear()
         request.session["subject"] = subject
         return True
