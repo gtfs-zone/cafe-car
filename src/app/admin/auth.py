@@ -48,7 +48,14 @@ class OIDCAuthBackend(AuthenticationBackend):
                         User.provider_subject == subject,
                     )
                 )
-                token = request.headers.get("X-Auth-Request-Access-Token")
+                # In debug mode oauth2-proxy is configured with PASS_AUTHORIZATION_HEADER,
+                # which forwards the ID token (always a JWT with email/name claims).
+                # In production the access token is used instead.
+                if settings.debug:
+                    auth_header = request.headers.get("Authorization", "")
+                    token = auth_header.removeprefix("Bearer ") if auth_header.startswith("Bearer ") else None
+                else:
+                    token = request.headers.get("X-Auth-Request-Access-Token")
                 claims = _decode_jwt_claims(token) if token else {}
                 # Only use JWT claims if the token's subject matches to avoid
                 # trusting claims from a mismatched or injected token.

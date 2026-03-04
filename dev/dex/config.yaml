@@ -24,7 +24,9 @@ staticPasswords:
     hash: "$2a$10$uFwuANe9Hwq/5CXAfkI5ue9.liAEjfQVapMjUXkZisF.UyhVQdDVu"
     username: alice
     userID: alice
+    name: Alice Local
   - email: bob@local
     hash: "$2a$10$uFwuANe9Hwq/5CXAfkI5ue9.liAEjfQVapMjUXkZisF.UyhVQdDVu"
     username: bob
     userID: bob
+    name: Bob Local
