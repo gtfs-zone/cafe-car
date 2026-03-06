@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # redis-gtfs-rt-api
 
 ## Project Overview
@@ -40,6 +44,28 @@ The public GTFS-RT endpoints (`rt.gtfs.zone`) have **no authentication middlewar
 - DB 1: This FastAPI service (cache and real-time data)
   - `REDIS_URL=redis://redis:6379/1`
 - DB 2: Bridge pub/sub messages (OwnTrack Redis Bridge)
+
+## Two-App Architecture
+
+There are two separate FastAPI apps sharing the same DB/Redis:
+
+- `src/app/main.py` → **public API** (`app = create_public_app()`): GTFS-RT protobuf endpoints (`/{feed_name}/trip_updates.pb`, `vehicle_positions.pb`, `service_alerts.pb`) + MQTT auth (`POST /mqtt/auth`). Run with `uv run fastapi dev src/app/main.py`.
+- `src/app/admin_main.py` → **admin app** (`app = create_admin_app()`): SQLAdmin interface mounted at `/`. Uses `OIDCAuthBackend`, `SessionMiddleware`, `DBSessionMiddleware`, and `SubjectMiddleware`. Run with `uv run fastapi dev src/app/admin_main.py`.
+
+The current user identity flows via `request.session["subject"]` (set in `OIDCAuthBackend.authenticate`) and also via `current_subject_var` (`ContextVar`) for use in `DriverAdmin.scaffold_form` where `request` is unavailable.
+
+## Redis Data Format
+
+Vehicle positions are stored at key `vehicle:{driver.username}` as JSON with fields: `driver`, `lat`, `lon`, `bearing`, `speed`, `trip_id`, `route_id` (optional), `timestamp`.
+
+## Linting & Tests
+
+```bash
+uv run ruff check src/          # lint
+uv run ruff check --fix src/    # lint + autofix
+uv run pytest                   # run all tests
+uv run pytest tests/test_foo.py::test_bar  # single test
+```
 
 ## Alembic Workflow
 
