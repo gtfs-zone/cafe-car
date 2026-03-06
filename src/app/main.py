@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from app.database import get_engine, get_session_factory
 from app.routers.gtfs_rt import router as gtfs_rt_router
+from app.routers.internal import router as internal_router
 from app.routers.mqtt_auth import router as mqtt_auth_router
 from app.settings import get_settings
 
@@ -26,13 +27,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 
 def create_public_app() -> FastAPI:
+    settings = get_settings()
+    include_in_schema = settings.debug
+
     app = FastAPI(
         title="redis-gtfs-rt-api",
         lifespan=lifespan,
     )
 
     app.include_router(gtfs_rt_router)
-    app.include_router(mqtt_auth_router)
+    app.include_router(mqtt_auth_router, include_in_schema=include_in_schema)
+    app.include_router(internal_router, include_in_schema=include_in_schema)
 
     @app.get("/health")
     async def health(request: Request):
