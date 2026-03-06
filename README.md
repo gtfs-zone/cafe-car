@@ -15,9 +15,26 @@ GitHub OAuth
                             └─> Public API (rt.<domain>)        — no auth
                                     ├─> PostgreSQL (feeds, drivers, users)
                                     └─> Redis DB 1 (vehicle positions)
+
+OwnTracks app (phone)
+    └─> NanoMQ (MQTT broker, bundled)
+            ├─> owntrack-redis-bridge → Redis DB 1 (vehicle:{username} keys)
+            └─> trip-updogger        → Redis DB 1 (trip_update:{trip_id} keys)
 ```
 
-Vehicle positions are published to Redis by [owntrack-redis-bridge](https://git.kcfam.us/gtfs.zone/owntrack-redis-bridge) via MQTT.
+Vehicle positions (`vehicle:{username}`) are published by [owntrack-redis-bridge](https://git.kcfam.us/gtfs.zone/owntrack-redis-bridge) and trip delay data (`trip_update:{trip_id}`) by [trip-updogger](https://git.kcfam.us/gtfs.zone/trip-updogger), both via the NanoMQ MQTT broker bundled in this stack.
+
+---
+
+## NanoMQ broker
+
+The `docker-compose.yml` includes a [NanoMQ](https://nanomq.io/) MQTT broker on port `1883`. Anonymous connections are disabled; authentication is delegated via HTTP POST to `/mqtt/auth` and ACL is checked via `/mqtt/acl` (both implemented by this service).
+
+ACL rules:
+- Users may only **publish** to `owntracks/{their_username}/#`
+- All clients may **subscribe** to `owntracks/#`
+
+Configuration lives in `dev/nanomq/nanomq.conf`.
 
 ---
 
@@ -26,8 +43,8 @@ Vehicle positions are published to Redis by [owntrack-redis-bridge](https://git.
 | Endpoint | Description |
 |----------|-------------|
 | `GET /{feed_name}/vehicle_positions.pb` | Live vehicle positions (GTFS-RT protobuf) |
-| `GET /{feed_name}/trip_updates.pb` | Trip updates (stub — returns empty feed) |
-| `GET /{feed_name}/service_alerts.pb` | Service alerts (stub — returns empty feed) |
+| `GET /{feed_name}/trip_updates.pb` | Trip updates from Redis (GTFS-RT protobuf) |
+| `GET /{feed_name}/service_alerts.pb` | Service alerts (stub — returns empty response) |
 | `POST /mqtt/auth` | MQTT broker auth hook (validates driver credentials) |
 | `GET /health` | Liveness check (pings Redis + Postgres) |
 
@@ -37,18 +54,19 @@ All endpoints are unauthenticated. Feed names are configured via the admin UI.
 
 ## Local development
 
-Starts Postgres, Redis, the public API, admin app, Dex, and oauth2-proxy:
+Starts Postgres, Redis, the public API, admin app, NanoMQ, Dex, and oauth2-proxy:
 
 ```bash
 docker compose up --build
 ```
 
-| Service | URL |
-|---------|-----|
+| Service | URL / Address |
+|---------|---------------|
 | Public API | http://localhost:8000 |
 | API docs | http://localhost:8000/docs |
 | Admin UI (via oauth2-proxy) | http://localhost:4180 |
 | Admin UI (direct, no auth) | http://localhost:8001 |
+| MQTT broker (NanoMQ) | localhost:1883 |
 
 **Dev login credentials** (Dex static passwords — log in with email):
 
@@ -100,6 +118,9 @@ uv run scripts/fetch_vehicles.py <feed_name> --backend http://localhost:8000
 ## Development commands
 
 ```bash
+# Install git hooks (required once per clone)
+uv run pre-commit install
+
 uv run ruff check src/          # lint
 uv run ruff check --fix src/    # lint + autofix
 uv run pytest                   # run tests
