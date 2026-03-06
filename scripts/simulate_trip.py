@@ -4,25 +4,27 @@
 # ///
 """Simulate a real GTFS trip along its shape, publishing to MQTT in OwnTracks format.
 
-The trip schedule times are spoofed — the bus starts immediately when the script
-runs. A random (or fixed) delay of 1–10 minutes is applied throughout the trip.
+The simulation starts at the position the bus would actually be at right now
+according to the GTFS schedule, with a random (or fixed) delay of 5–10 minutes.
+Today's date is used so the trip runs in wall-clock sync when --speed 1 is used.
 
-The simulation speed and publish interval are configurable, so you can run a
-30-minute route in 3 minutes with --speed 10.
+The MQTT topic follows the OwnTracks convention: owntracks/{driver}/{trip_id},
+e.g. owntracks/bob/WCCWB. Bus drivers set their OwnTracks device ID to their
+trip ID.
 
 Usage:
     # List available trips in the GTFS zip:
     uv run scripts/simulate_trip.py --list-trips
 
     # Simulate trip WCCWB at 10x speed, publishing every 2s:
-    uv run scripts/simulate_trip.py --driver mydriver --password secret --trip WCCWB
+    uv run scripts/simulate_trip.py --trip WCCWB
 
-    # Custom speed and interval:
-    uv run scripts/simulate_trip.py --driver mydriver --password secret \\
+    # Custom driver credentials, speed and interval:
+    uv run scripts/simulate_trip.py --driver bob --password bob \\
         --trip ELLSWB --speed 30 --interval 1
 
-    # Fixed delay (minutes):
-    uv run scripts/simulate_trip.py --driver mydriver --password secret --delay 5
+    # Custom delay range (seconds):
+    uv run scripts/simulate_trip.py --min-delay 30 --max-delay 300 --delay-drift 10
 """
 
 import argparse
@@ -121,6 +123,7 @@ def position_at_dist(
     return lat, lon, brg
 
 
+
 # ---------------------------------------------------------------------------
 # Schedule helpers
 # ---------------------------------------------------------------------------
@@ -192,9 +195,8 @@ def main() -> int:
         help="Path to GTFS zip (default: example_data/west_gtfs.zip)",
     )
     parser.add_argument("--trip", help="Trip ID to simulate (default: first trip in zip)")
-    parser.add_argument("--driver", default="bob", help="Driver username (MQTT username and OwnTracks user, default: bob)")
+    parser.add_argument("--driver", default="bob", help="Driver username / OwnTracks user (default: bob)")
     parser.add_argument("--password", default="bob", help="MQTT password (default: bob)")
-    parser.add_argument("--device", default="bus", help="OwnTracks device name (default: bus)")
     parser.add_argument("--broker", default="localhost", help="MQTT broker host (default: localhost)")
     parser.add_argument("--port", type=int, default=1883, help="MQTT broker port (default: 1883)")
     parser.add_argument(
@@ -210,11 +212,25 @@ def main() -> int:
         help="Real-time seconds between MQTT publishes (default: 2)",
     )
     parser.add_argument(
-        "--delay",
+        "--min-delay",
         type=float,
-        default=None,
-        metavar="MINUTES",
-        help="Fixed delay in minutes (default: random 1–10)",
+        default=60.0,
+        metavar="SECONDS",
+        help="Minimum delay in seconds (default: 60)",
+    )
+    parser.add_argument(
+        "--max-delay",
+        type=float,
+        default=600.0,
+        metavar="SECONDS",
+        help="Maximum delay in seconds (default: 600)",
+    )
+    parser.add_argument(
+        "--delay-drift",
+        type=float,
+        default=5.0,
+        metavar="SECONDS",
+        help="Max seconds the delay can drift per tick (default: 5)",
     )
     parser.add_argument(
         "--list-trips",
@@ -249,10 +265,10 @@ def main() -> int:
         return 1
 
     trip = trips_by_id[trip_id]
-    route_id = trip["route_id"]
     shape_id = trip["shape_id"]
+    route_id = trip["route_id"]  # for display only
 
-    delay_seconds = int((args.delay * 60) if args.delay is not None else random.randint(60, 600))
+    delay_seconds = random.uniform(args.min_delay, args.max_delay)
 
     # Build shape polyline
     shape_rows = [r for r in gtfs["shapes"] if r["shape_id"] == shape_id]
@@ -279,10 +295,10 @@ def main() -> int:
     print(f"Stops:      {len(stop_times)}")
     print(f"Schedule:   {stop_times[0]['departure_time']} → {stop_times[-1]['arrival_time']}")
     print(f"Duration:   {trip_duration // 60:.0f} min  ({trip_duration}s scheduled)")
-    print(f"Delay:      {delay_seconds // 60}m {delay_seconds % 60:02d}s")
+    print(f"Delay:      {args.min_delay:.0f}–{args.max_delay:.0f}s (random walk, drift ±{args.delay_drift:.0f}s/tick, starting {delay_seconds:.0f}s)")
     print(f"Speed:      {args.speed}x  →  real runtime ≈ {trip_duration / args.speed / 60:.1f} min")
     print(f"Interval:   {args.interval}s between publishes")
-    print(f"MQTT:       {args.broker}:{args.port}  topic=owntracks/{args.driver}/{args.device}")
+    print(f"MQTT:       {args.broker}:{args.port}  topic=owntracks/{args.driver}/{trip_id}")
     print()
 
     # Connect MQTT
@@ -297,7 +313,7 @@ def main() -> int:
     client.loop_start()
     print("Connected. Starting simulation (Ctrl-C to stop).\n")
 
-    topic = f"owntracks/{args.driver}/{args.device}"
+    topic = f"owntracks/{args.driver}/{trip_id}"
     real_start = time.time()
 
     try:
@@ -318,6 +334,9 @@ def main() -> int:
             speed_ms = dist_1s - dist  # m/s in scheduled time
             speed_kmh = speed_ms * 3.6
 
+            delay_seconds += random.uniform(-args.delay_drift, args.delay_drift)
+            delay_seconds = max(args.min_delay, min(args.max_delay, delay_seconds))
+
             stop_idx = current_stop_index(schedule_elapsed, stop_schedule)
             pct = schedule_elapsed / trip_duration * 100
 
@@ -328,10 +347,9 @@ def main() -> int:
                 "tst": int(time.time()),
                 "vel": round(speed_kmh, 1),
                 "cog": round(hdg, 1),
-                "tid": args.device,
-                "trip_id": trip_id,
-                "route_id": route_id,
-                "delay": delay_seconds,
+                "acc": 5,
+                "tid": args.driver[:2].upper(),
+                "t": "t",
             }
 
             result = client.publish(topic, json.dumps(payload), qos=1)
@@ -342,7 +360,7 @@ def main() -> int:
                 f"stop {stop_idx + 1}/{len(stop_times)}  "
                 f"lat={lat:.5f}  lon={lon:.5f}  "
                 f"hdg={hdg:5.1f}°  spd={speed_kmh:5.1f} km/h  "
-                f"delay={delay_seconds // 60}m{delay_seconds % 60:02d}s  {status}"
+                f"delay={delay_seconds:+.0f}s  {status}"
             )
 
             time.sleep(args.interval)
