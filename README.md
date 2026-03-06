@@ -18,11 +18,11 @@ GitHub OAuth
 
 OwnTracks app (phone)
     └─> NanoMQ (MQTT broker, bundled)
-            ├─> owntrack-redis-bridge → Redis DB 1 (vehicle:{username} keys)
+            ├─> vehicle-poser         → Redis DB 1 (vehicle:{username} keys)
             └─> trip-updogger        → Redis DB 1 (trip_update:{trip_id} keys)
 ```
 
-Vehicle positions (`vehicle:{username}`) are published by [owntrack-redis-bridge](https://git.kcfam.us/gtfs.zone/owntrack-redis-bridge) and trip delay data (`trip_update:{trip_id}`) by [trip-updogger](https://git.kcfam.us/gtfs.zone/trip-updogger), both via the NanoMQ MQTT broker bundled in this stack.
+Vehicle positions (`vehicle:{username}`) are published by [vehicle-poser](https://git.kcfam.us/gtfs.zone/vehicle-poser) and trip delay data (`trip_update:{trip_id}`) by [trip-updogger](https://git.kcfam.us/gtfs.zone/trip-updogger), both via the NanoMQ MQTT broker bundled in this stack.
 
 ---
 
@@ -81,22 +81,26 @@ docker compose up --build
 
 Two helper scripts are provided under `scripts/`:
 
-### `simulate_vehicles.py`
+### `simulate_trip.py`
 
-Writes fake vehicle positions to Redis every 10 seconds with slight random movement, simulating what owntrack-redis-bridge would publish in production. Includes a built-in set of test drivers across SF, NYC, and Chicago.
+Simulates a real GTFS trip along its shape, publishing vehicle positions to MQTT in OwnTracks format. The simulation starts at the position the bus would actually be at right now according to the GTFS schedule, with a random delay. The MQTT topic follows the OwnTracks convention: `owntracks/{driver}/{trip_id}`.
 
 ```bash
-# Simulate all built-in test drivers
-uv run scripts/simulate_vehicles.py
+# List available trips in the GTFS zip:
+uv run scripts/simulate_trip.py --list-trips
 
-# Simulate specific drivers only
-uv run scripts/simulate_vehicles.py --drivers test-driver-001 nyc-driver-001
+# Simulate trip WCCWB at 10x speed (default), publishing every 2s:
+uv run scripts/simulate_trip.py --trip WCCWB
 
-# Custom Redis URL
-uv run scripts/simulate_vehicles.py --redis redis://localhost:6379/1
+# Custom driver credentials, speed and interval:
+uv run scripts/simulate_trip.py --driver bob --password bob \
+    --trip ELLSWB --speed 30 --interval 1
+
+# Custom delay range (seconds):
+uv run scripts/simulate_trip.py --min-delay 30 --max-delay 300 --delay-drift 10
 ```
 
-The drivers must exist in the database (created via the admin UI) for their positions to appear in the feed. Each key has a 60-second TTL — vehicles stop appearing in the feed if the simulator is stopped.
+The driver must exist in the database (created via the admin UI) and have a matching MQTT password for their positions to appear in the feed.
 
 ### `fetch_vehicles.py`
 

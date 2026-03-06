@@ -43,7 +43,7 @@ The public GTFS-RT endpoints (`rt.gtfs.zone`) have **no authentication middlewar
 - DB 0: oauth2-proxy session storage (managed by deploy-gtfs-rt)
 - DB 1: This FastAPI service (cache and real-time data)
   - `REDIS_URL=redis://redis:6379/1`
-- DB 2: Bridge pub/sub messages (OwnTrack Redis Bridge)
+- DB 2: Bridge pub/sub messages (vehicle-poser)
 
 ## Two-App Architecture
 
