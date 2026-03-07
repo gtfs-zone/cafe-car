@@ -29,12 +29,14 @@ Usage:
 
 import argparse
 import csv
+import datetime
 import io
 import json
 import math
 import random
 import time
 import zipfile
+import zoneinfo
 
 import paho.mqtt.client as mqtt
 
@@ -50,11 +52,14 @@ def load_gtfs(zip_path: str) -> dict:
         data = z.read(name).decode("utf-8-sig")
         return list(csv.DictReader(io.StringIO(data)))
 
+    agency = read_table("agency.txt")
+    agency_timezone = agency[0]["agency_timezone"] if agency else "UTC"
     return {
         "trips": read_table("trips.txt"),
         "stop_times": read_table("stop_times.txt"),
         "stops": {r["stop_id"]: r for r in read_table("stops.txt")},
         "shapes": read_table("shapes.txt"),
+        "agency_timezone": agency_timezone,
     }
 
 
@@ -198,7 +203,11 @@ def main() -> int:
     parser.add_argument("--driver", default="bob", help="Driver username / OwnTracks user (default: bob)")
     parser.add_argument("--password", default="bob", help="MQTT password (default: bob)")
     parser.add_argument("--broker", default="localhost", help="MQTT broker host (default: localhost)")
-    parser.add_argument("--port", type=int, default=1883, help="MQTT broker port (default: 1883)")
+    parser.add_argument("--port", type=int, help="MQTT broker port (default: 8883 with --tls, 1883 otherwise)")
+    parser.add_argument("--tls", action="store_true", help="Enable TLS/SSL")
+    parser.add_argument("--tls-ca", metavar="FILE", help="CA certificate file (optional, uses system CAs by default)")
+    parser.add_argument("--tls-cert", metavar="FILE", help="Client certificate file for mutual TLS")
+    parser.add_argument("--tls-key", metavar="FILE", help="Client private key file for mutual TLS")
     parser.add_argument(
         "--speed",
         type=float,
@@ -233,11 +242,19 @@ def main() -> int:
         help="Max seconds the delay can drift per tick (default: 5)",
     )
     parser.add_argument(
+        "--real-time",
+        action="store_true",
+        help="Use actual wall-clock time for tst instead of simulated scheduled time + delay",
+    )
+    parser.add_argument(
         "--list-trips",
         action="store_true",
         help="List available trips in the GTFS zip and exit",
     )
     args = parser.parse_args()
+
+    if args.port is None:
+        args.port = 8883 if args.tls else 1883
 
     gtfs = load_gtfs(args.gtfs)
 
@@ -298,7 +315,8 @@ def main() -> int:
     print(f"Delay:      {args.min_delay:.0f}–{args.max_delay:.0f}s (random walk, drift ±{args.delay_drift:.0f}s/tick, starting {delay_seconds:.0f}s)")
     print(f"Speed:      {args.speed}x  →  real runtime ≈ {trip_duration / args.speed / 60:.1f} min")
     print(f"Interval:   {args.interval}s between publishes")
-    print(f"MQTT:       {args.broker}:{args.port}  topic=owntracks/{args.driver}/{trip_id}")
+    print(f"Timezone:   {gtfs['agency_timezone']}")
+    print(f"MQTT:       {args.broker}:{args.port}  topic=owntracks/{args.driver}/{trip_id}  tls={'yes' if args.tls else 'no'}")
     print()
 
     # Connect MQTT
@@ -308,6 +326,13 @@ def main() -> int:
     )
     client.username_pw_set(args.driver, args.password)
 
+    if args.tls:
+        client.tls_set(
+            ca_certs=args.tls_ca,
+            certfile=args.tls_cert,
+            keyfile=args.tls_key,
+        )
+
     print(f"Connecting to {args.broker}:{args.port}…")
     client.connect(args.broker, args.port, keepalive=60)
     client.loop_start()
@@ -315,6 +340,8 @@ def main() -> int:
 
     topic = f"owntracks/{args.driver}/{trip_id}"
     real_start = time.time()
+    tz = zoneinfo.ZoneInfo(gtfs["agency_timezone"])
+    today_midnight = int(datetime.datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
 
     try:
         while True:
@@ -340,11 +367,16 @@ def main() -> int:
             stop_idx = current_stop_index(schedule_elapsed, stop_schedule)
             pct = schedule_elapsed / trip_duration * 100
 
+            if args.real_time:
+                tst = int(time.time())
+            else:
+                tst = today_midnight + int(stop_schedule[0][0] + schedule_elapsed + delay_seconds)
+
             payload = {
                 "_type": "location",
                 "lat": round(lat, 6),
                 "lon": round(lon, 6),
-                "tst": int(time.time()),
+                "tst": tst,
                 "vel": round(speed_kmh, 1),
                 "cog": round(hdg, 1),
                 "acc": 5,
