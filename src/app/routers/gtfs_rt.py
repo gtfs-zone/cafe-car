@@ -65,8 +65,17 @@ async def trip_updates(
         entity = msg.entity.add()
         entity.id = str(entity_id)
         entity.trip_update.trip.trip_id = trip_id
-        entity.trip_update.delay = trip_data["delay"]
+        entity.trip_update.trip.schedule_relationship = (
+            gtfs_realtime_pb2.TripDescriptor.SCHEDULED
+        )
+        entity.trip_update.vehicle.id = trip_data["vehicle_id"]
         entity.trip_update.timestamp = trip_data["timestamp"]
+        stu = entity.trip_update.stop_time_update.add()
+        stu.stop_sequence = trip_data["stop_sequence"]
+        stu.arrival.delay = trip_data["delay"]
+        stu.schedule_relationship = (
+            gtfs_realtime_pb2.TripUpdate.StopTimeUpdate.SCHEDULED
+        )
 
     return Response(content=msg.SerializeToString(), media_type=PROTOBUF_CONTENT_TYPE)
 
@@ -107,6 +116,7 @@ async def vehicle_positions(
         entity.vehicle.position.bearing = data["bearing"]
         entity.vehicle.position.speed = data["speed"]
         entity.vehicle.trip.trip_id = data["trip_id"]
+        entity.vehicle.trip.schedule_relationship = gtfs_realtime_pb2.TripDescriptor.SCHEDULED
         if route_id := data.get("route_id"):
             entity.vehicle.trip.route_id = route_id
         entity.vehicle.current_status = gtfs_realtime_pb2.VehiclePosition.IN_TRANSIT_TO
