@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <link rel="stylesheet" href="{{ url_for('admin:statics', path='css/tabler.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('admin:statics', path='css/tabler-icons.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('admin:statics', path='css/fontawesome.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('admin:statics', path='css/select2.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('admin:statics', path='css/flatpickr.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('admin:statics', path='css/main.css') }}">
+  {% if admin.favicon_url %}
+  <link rel="icon" href="{{ admin.favicon_url }}">
+  {% endif %}
+  {% block head %}
+  {% endblock %}
+  <title>{{ admin.title }}</title>
+</head>
+
+<body>
+  {% block body %}
+  <main>
+    {% block main %}
+    {% endblock %}
+  </main>
+  {% endblock %}
+  <script type="text/javascript" src="{{ url_for('admin:statics', path='js/jquery.min.js') }}"></script>
+  <script type="text/javascript" src="{{ url_for('admin:statics', path='js/tabler.min.js') }}"></script>
+  <script type="text/javascript" src="{{ url_for('admin:statics', path='js/popper.min.js') }}"></script>
+  <script type="text/javascript" src="{{ url_for('admin:statics', path='js/bootstrap.min.js') }}"></script>
+  <script type="text/javascript" src="{{ url_for('admin:statics', path='js/select2.full.min.js') }}"></script>
+  <script type="text/javascript" src="{{ url_for('admin:statics', path='js/flatpickr.min.js') }}"></script>
+  <script type="text/javascript" src="{{ url_for('admin:statics', path='js/main.js') }}"></script>
+  {% block tail %}
+  {% endblock %}
+  <script>
+  (function () {
+    var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    var offsetMin = new Date().getTimezoneOffset();
+    var sign = offsetMin <= 0 ? "+" : "-";
+    var absH = Math.floor(Math.abs(offsetMin) / 60).toString().padStart(2, "0");
+    var absM = (Math.abs(offsetMin) % 60).toString().padStart(2, "0");
+    var offsetStr = "UTC" + sign + absH + ":" + absM;
+
+    function addTzBadge(input) {
+      if (input.dataset.tzBadged) return;
+      input.dataset.tzBadged = "1";
+      var badge = document.createElement("small");
+      badge.className = "text-muted d-block mt-1";
+      badge.textContent = "Enter time in your local timezone: " + tz + " (" + offsetStr + "). Stored as UTC.";
+      input.parentNode.insertBefore(badge, input.nextSibling);
+    }
+
+    function localStrToUtcStr(localStr) {
+      if (!localStr) return localStr;
+      var d = new Date(localStr);
+      if (isNaN(d.getTime())) return localStr;
+      var y = d.getUTCFullYear();
+      var mo = String(d.getUTCMonth() + 1).padStart(2, "0");
+      var dy = String(d.getUTCDate()).padStart(2, "0");
+      var h = String(d.getUTCHours()).padStart(2, "0");
+      var mi = String(d.getUTCMinutes()).padStart(2, "0");
+      return y + "-" + mo + "-" + dy + "T" + h + ":" + mi;
+    }
+
+    function utcStrToLocalStr(utcStr) {
+      if (!utcStr) return utcStr;
+      var d = new Date(utcStr + "Z");
+      if (isNaN(d.getTime())) return utcStr;
+      var y = d.getFullYear();
+      var mo = String(d.getMonth() + 1).padStart(2, "0");
+      var dy = String(d.getDate()).padStart(2, "0");
+      var h = String(d.getHours()).padStart(2, "0");
+      var mi = String(d.getMinutes()).padStart(2, "0");
+      return y + "-" + mo + "-" + dy + "T" + h + ":" + mi;
+    }
+
+    function initDatetimeInputs() {
+      document.querySelectorAll("input[type='datetime-local']").forEach(function (input) {
+        addTzBadge(input);
+        if (input.value) {
+          input.value = utcStrToLocalStr(input.value);
+        }
+      });
+    }
+
+    function attachFormSubmit() {
+      document.querySelectorAll("form").forEach(function (form) {
+        if (form.dataset.tzHooked) return;
+        form.dataset.tzHooked = "1";
+        form.addEventListener("submit", function () {
+          form.querySelectorAll("input[type='datetime-local']").forEach(function (input) {
+            if (input.value) {
+              input.value = localStrToUtcStr(input.value);
+            }
+          });
+        });
+      });
+    }
+
+    function initUtcTimeElements() {
+      document.querySelectorAll("time[data-utc]").forEach(function (el) {
+        var d = new Date(el.dataset.utc);
+        if (!isNaN(d.getTime())) {
+          el.textContent = d.toLocaleString(undefined, {
+            year: "numeric", month: "2-digit", day: "2-digit",
+            hour: "2-digit", minute: "2-digit",
+            timeZoneName: "short",
+          });
+          el.title = "UTC: " + el.dataset.utc;
+        }
+      });
+    }
+
+    document.addEventListener("DOMContentLoaded", function () {
+      initDatetimeInputs();
+      attachFormSubmit();
+      initUtcTimeElements();
+    });
+  })();
+  </script>
+</body>
+
+</html>

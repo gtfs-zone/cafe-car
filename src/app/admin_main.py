@@ -10,7 +10,12 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.admin.auth import OIDCAuthBackend
 from app.admin.context import current_subject_var
-from app.admin.views import DriverAdmin, FeedAdmin
+from app.admin.views import (
+    DriverAdmin,
+    FeedAdmin,
+    InformedEntityAdmin,
+    ServiceAlertAdmin,
+)
 from app.database import get_engine, get_session_factory
 from app.settings import get_settings
 
@@ -58,6 +63,8 @@ def create_admin_app() -> FastAPI:
     admin = Admin(app, engine=get_engine(), authentication_backend=auth_backend, base_url="/", templates_dir=templates_dir)
     admin.add_view(FeedAdmin)
     admin.add_view(DriverAdmin)
+    admin.add_view(ServiceAlertAdmin)
+    admin.add_view(InformedEntityAdmin)
 
     return app
 
