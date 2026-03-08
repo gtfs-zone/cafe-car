@@ -70,6 +70,36 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  celery-worker:
+    build:
+      context: ../schedule-foamer
+    command: celery -A worker.celery_app worker -l info
+    restart: on-failure
+    environment:
+      DATABASE_URL: postgresql+psycopg2://postgres:mysecretpassword@db:5432/postgres
+      CELERY_BROKER_URL: redis://redis:6379/3
+      CELERY_RESULT_BACKEND: redis://redis:6379/4
+      FEED_REFRESH_INTERVAL_MINUTES: 10  # For testing, pull feeds every 10 minutes
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  celery-beat:
+    build:
+      context: ../schedule-foamer
+    command: celery -A worker.celery_app beat -l info
+    restart: on-failure
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/3
+      CELERY_RESULT_BACKEND: redis://redis:6379/4
+    depends_on:
+      redis:
+        condition: service_healthy
+
   nanomq:
     image: emqx/nanomq:latest
     ports:

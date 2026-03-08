@@ -1,11 +1,12 @@
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from pydantic import AnyHttpUrl, TypeAdapter, field_validator
 from sqlmodel import Field, Relationship, SQLModel
 
 if TYPE_CHECKING:
     from app.models.driver import Driver
+    from app.models.gtfs_static import FeedLoadStatus
     from app.models.service_alert import ServiceAlert
     from app.models.user import User
 
@@ -23,6 +24,7 @@ class Feed(SQLModel, table=True):
     owner: "User" = Relationship(back_populates="feeds")
     drivers: list["Driver"] = Relationship(back_populates="feed")
     alerts: list["ServiceAlert"] = Relationship(back_populates="feed")
+    load_status: Optional["FeedLoadStatus"] = Relationship()
 
     @field_validator("feed_name")
     @classmethod

@@ -17,6 +17,13 @@ from app.models.informed_entity import InformedEntity
 from app.models.service_alert import ServiceAlert
 from app.models.user import User
 
+_STATUS_BADGE = {
+    "pending": '<span style="color:#f59e0b;font-weight:bold">pending</span>',
+    "running": '<span style="color:#3b82f6;font-weight:bold">running</span>',
+    "success": '<span style="color:#22c55e;font-weight:bold">success</span>',
+    "failed": '<span style="color:#ef4444;font-weight:bold">failed</span>',
+}
+
 _CAUSE_CHOICES = [
     ("", "—"),
     ("UNKNOWN_CAUSE", "Unknown Cause"),
@@ -83,12 +90,48 @@ class FeedAdmin(ModelView, model=Feed):
             "validators": [URL(message="Must be a valid http or https URL")]
         },
     }
-    column_list = [Feed.feed_name, Feed.static_feed_url]
+    column_list = [
+        Feed.feed_name,
+        Feed.static_feed_url,
+        "load_status_badge",
+        "last_loaded_at",
+        "stop_count",
+        "route_count",
+        "trip_count",
+        "reload_action",
+    ]
+    column_labels = {
+        "load_status_badge": "Status",
+        "last_loaded_at": "Last Loaded",
+        "stop_count": "Stops",
+        "route_count": "Routes",
+        "trip_count": "Trips",
+        "reload_action": "",
+    }
     column_formatters = {
         Feed.feed_name: lambda m, a: Markup(f'<a href="/feed/edit/{m.id}">{m.feed_name}</a>'),
+        "load_status_badge": lambda m, a: Markup(
+            _STATUS_BADGE.get(
+                m.load_status.status if m.load_status else "",
+                '<span style="color:#9ca3af">—</span>',
+            )
+        ),
+        "last_loaded_at": lambda m, a: (
+            m.load_status.last_loaded_at.strftime("%Y-%m-%d %H:%M UTC")
+            if m.load_status and m.load_status.last_loaded_at
+            else "—"
+        ),
+        "stop_count": lambda m, a: m.load_status.stop_count if m.load_status else "—",
+        "route_count": lambda m, a: m.load_status.route_count if m.load_status else "—",
+        "trip_count": lambda m, a: m.load_status.trip_count if m.load_status else "—",
+        "reload_action": lambda m, a: Markup(
+            f'<form method="post" action="/feeds/{m.id}/reload" style="margin:0">'
+            f'<button type="submit" style="cursor:pointer">&#8635; Reload</button>'
+            f"</form>"
+        ),
     }
     column_searchable_list = [Feed.feed_name]
-    form_excluded_columns = ["owner", "drivers", "alerts", "owner_id"]
+    form_excluded_columns = ["owner", "drivers", "alerts", "owner_id", "load_status"]
     name = "Feed"
     name_plural = "Feeds"
 
@@ -100,7 +143,9 @@ class FeedAdmin(ModelView, model=Feed):
         )
 
     def list_query(self, request: Request):
-        return self._base_query(_current_subject(request))
+        return self._base_query(_current_subject(request)).options(
+            selectinload(Feed.load_status)
+        )
 
     def count_query(self, request: Request):
         subject = _current_subject(request)
@@ -148,6 +193,16 @@ class FeedAdmin(ModelView, model=Feed):
     async def delete_model(self, request: Request, pk: Any) -> None:
         await self._get_owned_feed(request, pk)
         await super().delete_model(request, pk)
+
+    async def after_model_change(
+        self, data: dict, model: Feed, is_created: bool, request: Request
+    ) -> None:
+        try:
+            from app.celery_client import celery_app
+
+            celery_app.send_task("worker.tasks.load_feed", args=[model.id])
+        except Exception:
+            pass  # worker unavailable; task will be triggered manually
 
 
 class DriverAdmin(ModelView, model=Driver):

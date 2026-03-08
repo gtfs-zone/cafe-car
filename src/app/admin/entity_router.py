@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -127,6 +127,27 @@ async def add_entity(
     await session.commit()
     entities = await _load_entities(session, alert_id)
     return _render_partial(request, alert_id, entities)
+
+
+@router.post("/feeds/{feed_id}/reload")
+async def reload_feed(request: Request, feed_id: int) -> RedirectResponse:
+    subject = request.session.get("subject", "")
+    session: AsyncSession = request.state.session
+    result = await session.execute(
+        select(Feed)
+        .join(User, Feed.owner_id == User.id)
+        .where(User.provider_subject == subject)
+        .where(Feed.id == feed_id)
+    )
+    if result.scalar_one_or_none() is None:
+        return HTMLResponse("Not found or access denied", status_code=403)
+    try:
+        from app.celery_client import celery_app
+
+        celery_app.send_task("worker.tasks.load_feed", args=[feed_id])
+    except Exception:
+        pass  # worker unavailable
+    return RedirectResponse(url="/feed/list", status_code=303)
 
 
 @router.delete(

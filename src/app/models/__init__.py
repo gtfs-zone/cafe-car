@@ -1,7 +1,25 @@
 from app.models.driver import Driver
 from app.models.feed import Feed
+from app.models.gtfs_static import (
+    FeedLoadStatus,
+    GtfsRoute,
+    GtfsStop,
+    GtfsStopTime,
+    GtfsTrip,
+)
 from app.models.informed_entity import InformedEntity
 from app.models.service_alert import ServiceAlert
 from app.models.user import User
 
-__all__ = ["Driver", "Feed", "InformedEntity", "ServiceAlert", "User"]
+__all__ = [
+    "Driver",
+    "Feed",
+    "FeedLoadStatus",
+    "GtfsRoute",
+    "GtfsStop",
+    "GtfsStopTime",
+    "GtfsTrip",
+    "InformedEntity",
+    "ServiceAlert",
+    "User",
+]

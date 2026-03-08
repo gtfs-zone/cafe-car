@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     oidc_provider: str = "dex"
     oauth2_proxy_logout_url: str = "/oauth2/sign_out"
     debug: bool = False
+    celery_broker_url: str = "redis://redis:6379/3"
 
     model_config = SettingsConfigDict(env_file=".env")
 
