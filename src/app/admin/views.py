@@ -5,6 +5,7 @@ from markupsafe import Markup
 from sqladmin import ModelView
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from starlette.requests import Request
 from wtforms import DateTimeLocalField, SelectField
 from wtforms.validators import URL, Length, Optional, Regexp
@@ -271,6 +272,9 @@ def _make_alert_datetimes_utc(data: dict) -> None:
 
 
 class ServiceAlertAdmin(ModelView, model=ServiceAlert):
+    edit_template = "sqladmin/service_alert_edit.html"
+    details_template = "sqladmin/service_alert_detail.html"
+
     form_args = {
         "header_text": {"validators": [Length(max=512)]},
         "description_text": {"validators": [Length(max=2048)]},
@@ -293,6 +297,9 @@ class ServiceAlertAdmin(ModelView, model=ServiceAlert):
     column_formatters = {
         ServiceAlert.active_period_start: lambda m, a: _fmt_utc_dt(m.active_period_start),
         ServiceAlert.active_period_end: lambda m, a: _fmt_utc_dt(m.active_period_end),
+        "entity_summary": lambda m, a: Markup(
+            "<br>".join(str(e) for e in m.entities) or "<em>none</em>"
+        ),
     }
     column_list = [
         ServiceAlert.header_text,
@@ -301,8 +308,10 @@ class ServiceAlertAdmin(ModelView, model=ServiceAlert):
         ServiceAlert.severity_level,
         ServiceAlert.active_period_start,
         ServiceAlert.active_period_end,
+        "entity_summary",
         "feed",
     ]
+    column_labels = {"entity_summary": "Entities"}
     column_searchable_list = [ServiceAlert.header_text]
     form_excluded_columns = ["feed", "entities"]
     name = "Service Alert"
@@ -334,7 +343,9 @@ class ServiceAlertAdmin(ModelView, model=ServiceAlert):
         )
 
     def list_query(self, request: Request):
-        return self._base_query(_current_subject(request))
+        return self._base_query(_current_subject(request)).options(
+            selectinload(ServiceAlert.entities)
+        )
 
     def count_query(self, request: Request):
         subject = _current_subject(request)
@@ -410,6 +421,9 @@ _ROUTE_TYPE_CHOICES = [
 
 
 class InformedEntityAdmin(ModelView, model=InformedEntity):
+    def is_visible(self, request: Request) -> bool:
+        return False
+
     column_list = [
         "alert",
         InformedEntity.agency_id,

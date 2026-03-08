@@ -10,6 +10,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.admin.auth import OIDCAuthBackend
 from app.admin.context import current_subject_var
+from app.admin.entity_router import router as entity_router
 from app.admin.views import (
     DriverAdmin,
     FeedAdmin,
@@ -57,6 +58,10 @@ def create_admin_app() -> FastAPI:
     app.add_middleware(DBSessionMiddleware)
     app.add_middleware(SubjectMiddleware)
     app.add_middleware(SessionMiddleware, secret_key=settings.session_secret_key)
+
+    # Register entity router BEFORE Admin, because Admin mounts at "/" which
+    # would otherwise swallow all requests before these routes are reached.
+    app.include_router(entity_router)
 
     auth_backend = OIDCAuthBackend(secret_key=settings.session_secret_key)
     templates_dir = str(Path(__file__).parent / "admin" / "templates")

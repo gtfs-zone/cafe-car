@@ -1,0 +1,121 @@
+<div id="entity-section">
+  {% if error %}
+  <div class="alert alert-danger" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <div class="table-responsive mb-3">
+    <table class="table table-vcenter table-bordered table-sm">
+      <thead>
+        <tr>
+          <th>Agency</th>
+          <th>Route</th>
+          <th>Route Type</th>
+          <th>Dir</th>
+          <th>Stop</th>
+          <th>Trip</th>
+          <th>Trip Route</th>
+          <th>Trip Dir</th>
+          <th>Start Time</th>
+          <th>Start Date</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entity in entities %}
+        <tr>
+          <td>{{ entity.agency_id or "" }}</td>
+          <td>{{ entity.route_id or "" }}</td>
+          <td>{% if entity.route_type is not none %}{{ route_type_labels.get(entity.route_type, entity.route_type) }}{% endif %}</td>
+          <td>{{ entity.direction_id if entity.direction_id is not none else "" }}</td>
+          <td>{{ entity.stop_id or "" }}</td>
+          <td>{{ entity.trip_id or "" }}</td>
+          <td>{{ entity.trip_route_id or "" }}</td>
+          <td>{{ entity.trip_direction_id if entity.trip_direction_id is not none else "" }}</td>
+          <td>{{ entity.trip_start_time or "" }}</td>
+          <td>{{ entity.trip_start_date or "" }}</td>
+          <td>
+            <button
+              hx-delete="/service-alert/{{ alert_id }}/entity/{{ entity.id }}"
+              hx-target="#entity-section"
+              hx-swap="outerHTML"
+              hx-confirm="Delete this entity?"
+              class="btn btn-sm btn-danger">✕</button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="11" class="text-muted text-center">No entities yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <details>
+    <summary class="btn btn-sm btn-secondary mb-2" style="display:inline-block;cursor:pointer;">+ Add Entity</summary>
+    <form
+      hx-post="/service-alert/{{ alert_id }}/entity"
+      hx-target="#entity-section"
+      hx-swap="outerHTML"
+      class="mt-2">
+      <div class="row g-2">
+        <div class="col-md-4">
+          <label class="form-label">Agency ID</label>
+          <input type="text" name="agency_id" class="form-control form-control-sm" value="">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Route ID</label>
+          <input type="text" name="route_id" class="form-control form-control-sm" value="">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Route Type</label>
+          <select name="route_type" class="form-control form-control-sm">
+            <option value="">—</option>
+            <option value="0">0 — Tram / Light Rail</option>
+            <option value="1">1 — Subway / Metro</option>
+            <option value="2">2 — Rail</option>
+            <option value="3">3 — Bus</option>
+            <option value="4">4 — Ferry</option>
+            <option value="5">5 — Cable Tram</option>
+            <option value="6">6 — Aerial Lift</option>
+            <option value="7">7 — Funicular</option>
+            <option value="11">11 — Trolleybus</option>
+            <option value="12">12 — Monorail</option>
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Direction ID</label>
+          <input type="number" name="direction_id" class="form-control form-control-sm" value="">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Stop ID</label>
+          <input type="text" name="stop_id" class="form-control form-control-sm" value="">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Trip ID</label>
+          <input type="text" name="trip_id" class="form-control form-control-sm" value="">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Trip Route ID</label>
+          <input type="text" name="trip_route_id" class="form-control form-control-sm" value="">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Trip Direction ID</label>
+          <input type="number" name="trip_direction_id" class="form-control form-control-sm" value="">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Trip Start Time (HH:MM:SS)</label>
+          <input type="text" name="trip_start_time" class="form-control form-control-sm" value="">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Trip Start Date (YYYYMMDD)</label>
+          <input type="text" name="trip_start_date" class="form-control form-control-sm" value="">
+        </div>
+      </div>
+      <small class="text-muted d-block mt-2">
+        At least one of: agency_id, route_id, route_type, direction_id, stop_id, or trip_id is required.
+        direction_id requires route_id. Trip detail fields (trip_route_id, trip_direction_id,
+        trip_start_time, trip_start_date) are supplementary and require trip_id.
+      </small>
+      <button type="submit" class="btn btn-sm btn-primary mt-2">Add Entity</button>
+    </form>
+  </details>
+</div>
