@@ -6,7 +6,7 @@ from sqlmodel import Field, Relationship, SQLModel
 
 if TYPE_CHECKING:
     from app.models.driver import Driver
-    from app.models.gtfs_static import FeedLoadStatus
+    from app.models.gtfs_static import GtfsStaticFeed
     from app.models.service_alert import ServiceAlert
     from app.models.user import User
 
@@ -20,11 +20,11 @@ class Feed(SQLModel, table=True):
     feed_name: str = Field(unique=True, index=True, max_length=64)
     static_feed_url: str
     owner_id: int = Field(foreign_key="user.id")
-
+    gtfs_static_feed_id: int | None = Field(default=None, foreign_key="gtfs_static_feed.id")
     owner: "User" = Relationship(back_populates="feeds")
     drivers: list["Driver"] = Relationship(back_populates="feed")
     alerts: list["ServiceAlert"] = Relationship(back_populates="feed")
-    load_status: Optional["FeedLoadStatus"] = Relationship()
+    gtfs_static_feed: Optional["GtfsStaticFeed"] = Relationship()
 
     @field_validator("feed_name")
     @classmethod

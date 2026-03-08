@@ -95,35 +95,26 @@ class FeedAdmin(ModelView, model=Feed):
         Feed.static_feed_url,
         "load_status_badge",
         "last_loaded_at",
-        "stop_count",
-        "route_count",
-        "trip_count",
         "reload_action",
     ]
     column_labels = {
         "load_status_badge": "Status",
         "last_loaded_at": "Last Loaded",
-        "stop_count": "Stops",
-        "route_count": "Routes",
-        "trip_count": "Trips",
         "reload_action": "",
     }
     column_formatters = {
         Feed.feed_name: lambda m, a: Markup(f'<a href="/feed/edit/{m.id}">{m.feed_name}</a>'),
         "load_status_badge": lambda m, a: Markup(
             _STATUS_BADGE.get(
-                m.load_status.status if m.load_status else "",
+                m.gtfs_static_feed.status if m.gtfs_static_feed else "",
                 '<span style="color:#9ca3af">—</span>',
             )
         ),
         "last_loaded_at": lambda m, a: (
-            m.load_status.last_loaded_at.strftime("%Y-%m-%d %H:%M UTC")
-            if m.load_status and m.load_status.last_loaded_at
+            m.gtfs_static_feed.last_loaded_at.strftime("%Y-%m-%d %H:%M UTC")
+            if m.gtfs_static_feed and m.gtfs_static_feed.last_loaded_at
             else "—"
         ),
-        "stop_count": lambda m, a: m.load_status.stop_count if m.load_status else "—",
-        "route_count": lambda m, a: m.load_status.route_count if m.load_status else "—",
-        "trip_count": lambda m, a: m.load_status.trip_count if m.load_status else "—",
         "reload_action": lambda m, a: Markup(
             f'<form method="post" action="/feeds/{m.id}/reload" style="margin:0">'
             f'<button type="submit" style="cursor:pointer">&#8635; Reload</button>'
@@ -131,7 +122,7 @@ class FeedAdmin(ModelView, model=Feed):
         ),
     }
     column_searchable_list = [Feed.feed_name]
-    form_excluded_columns = ["owner", "drivers", "alerts", "owner_id", "load_status"]
+    form_excluded_columns = ["owner", "drivers", "alerts", "owner_id", "gtfs_static_feed"]
     name = "Feed"
     name_plural = "Feeds"
 
@@ -144,7 +135,7 @@ class FeedAdmin(ModelView, model=Feed):
 
     def list_query(self, request: Request):
         return self._base_query(_current_subject(request)).options(
-            selectinload(Feed.load_status)
+            selectinload(Feed.gtfs_static_feed)
         )
 
     def count_query(self, request: Request):
