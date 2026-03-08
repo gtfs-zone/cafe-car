@@ -22,6 +22,12 @@ class GtfsStaticFeed(SQLModel, table=True):
     last_loaded_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
+    started_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    next_retry_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
 
 
 class GtfsStop(SQLModel, table=True):
