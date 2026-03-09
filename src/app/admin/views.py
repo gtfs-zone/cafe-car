@@ -123,7 +123,7 @@ class FeedAdmin(ModelView, model=Feed):
         ),
     }
     column_searchable_list = [Feed.feed_name]
-    form_excluded_columns = ["owner", "drivers", "alerts", "owner_id", "gtfs_static_feed"]
+    form_excluded_columns = ["owner", "drivers", "alerts", "owner_id", "gtfs_static_feed", "aliases"]
     name = "Feed"
     name_plural = "Feeds"
 
