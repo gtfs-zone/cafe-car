@@ -80,6 +80,8 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/3
       CELERY_RESULT_BACKEND: redis://redis:6379/4
       FEED_REFRESH_INTERVAL_MINUTES: 10  # For testing, pull feeds every 10 minutes
+      CELERY_WORKER_CONCURRENCY: 2
+      CELERY_MAX_TASKS_PER_CHILD: 10
     depends_on:
       db:
         condition: service_healthy
