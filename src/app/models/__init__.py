@@ -9,6 +9,7 @@ from app.models.gtfs_static import (
 )
 from app.models.informed_entity import InformedEntity
 from app.models.service_alert import ServiceAlert
+from app.models.trip_alias import TripAlias
 from app.models.user import User
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "GtfsTrip",
     "InformedEntity",
     "ServiceAlert",
+    "TripAlias",
     "User",
 ]

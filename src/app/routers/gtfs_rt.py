@@ -12,8 +12,14 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.database import get_session
 from app.models.feed import Feed
 from app.models.service_alert import ServiceAlert
+from app.models.trip_alias import TripAlias
 
 router = APIRouter()
+
+
+async def _alias_map(feed_id: int, session: AsyncSession) -> dict[str, str]:
+    result = await session.exec(select(TripAlias).where(TripAlias.feed_id == feed_id))
+    return {a.alias: a.trip_id for a in result.all()}
 
 PROTOBUF_CONTENT_TYPE = "application/x-protobuf"
 
@@ -67,7 +73,7 @@ async def trip_updates(
         entity_id += 1
         entity = msg.entity.add()
         entity.id = str(entity_id)
-        entity.trip_update.trip.trip_id = trip_id
+        entity.trip_update.trip.trip_id = trip_data["trip_id"]
         entity.trip_update.trip.schedule_relationship = (
             gtfs_realtime_pb2.TripDescriptor.SCHEDULED
         )
@@ -100,6 +106,7 @@ async def vehicle_positions(
     drivers = result.all()
 
     redis = request.app.state.redis
+    alias_map = await _alias_map(feed.id, session)
 
     entity_id = 0
     for driver in drivers:
@@ -118,7 +125,7 @@ async def vehicle_positions(
         entity.vehicle.position.longitude = data["lon"]
         entity.vehicle.position.bearing = data["bearing"]
         entity.vehicle.position.speed = data["speed"]
-        entity.vehicle.trip.trip_id = data["trip_id"]
+        entity.vehicle.trip.trip_id = alias_map.get(data["trip_id"], data["trip_id"])
         entity.vehicle.trip.schedule_relationship = gtfs_realtime_pb2.TripDescriptor.SCHEDULED
         if route_id := data.get("route_id"):
             entity.vehicle.trip.route_id = route_id

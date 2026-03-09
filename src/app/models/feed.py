@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from app.models.driver import Driver
     from app.models.gtfs_static import GtfsStaticFeed
     from app.models.service_alert import ServiceAlert
+    from app.models.trip_alias import TripAlias
     from app.models.user import User
 
 _url_validator = TypeAdapter(AnyHttpUrl)
@@ -24,6 +25,7 @@ class Feed(SQLModel, table=True):
     owner: "User" = Relationship(back_populates="feeds")
     drivers: list["Driver"] = Relationship(back_populates="feed")
     alerts: list["ServiceAlert"] = Relationship(back_populates="feed")
+    aliases: list["TripAlias"] = Relationship(back_populates="feed")
     gtfs_static_feed: Optional["GtfsStaticFeed"] = Relationship()
 
     @field_validator("feed_name")

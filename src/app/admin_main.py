@@ -16,6 +16,7 @@ from app.admin.views import (
     FeedAdmin,
     InformedEntityAdmin,
     ServiceAlertAdmin,
+    TripAliasAdmin,
 )
 from app.database import get_engine, get_session_factory
 from app.settings import get_settings
@@ -68,6 +69,7 @@ def create_admin_app() -> FastAPI:
     admin = Admin(app, engine=get_engine(), authentication_backend=auth_backend, base_url="/", templates_dir=templates_dir)
     admin.add_view(FeedAdmin)
     admin.add_view(DriverAdmin)
+    admin.add_view(TripAliasAdmin)
     admin.add_view(ServiceAlertAdmin)
     admin.add_view(InformedEntityAdmin)
 
