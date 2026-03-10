@@ -6,10 +6,10 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.feed import Feed
-from app.models.informed_entity import InformedEntity
-from app.models.service_alert import ServiceAlert
-from app.models.user import User
+from railroad_club.models.feed import Feed
+from railroad_club.models.informed_entity import InformedEntity
+from railroad_club.models.service_alert import ServiceAlert
+from railroad_club.models.user import User
 
 router = APIRouter()
 

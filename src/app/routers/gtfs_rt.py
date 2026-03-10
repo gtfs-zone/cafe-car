@@ -10,9 +10,9 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.database import get_session
-from app.models.feed import Feed
-from app.models.service_alert import ServiceAlert
-from app.models.trip_alias import TripAlias
+from railroad_club.models.feed import Feed
+from railroad_club.models.service_alert import ServiceAlert
+from railroad_club.models.trip_alias import TripAlias
 
 router = APIRouter()
 
@@ -46,7 +46,7 @@ async def trip_updates(
     msg.header.incrementality = gtfs_realtime_pb2.FeedHeader.FULL_DATASET
     msg.header.timestamp = int(time.time())
 
-    from app.models.driver import Driver
+    from railroad_club.models.driver import Driver
 
     result = await session.exec(select(Driver).where(Driver.feed_id == feed.id))
     drivers = result.all()
@@ -100,7 +100,7 @@ async def vehicle_positions(
     msg.header.incrementality = gtfs_realtime_pb2.FeedHeader.FULL_DATASET
     msg.header.timestamp = int(time.time())
 
-    from app.models.driver import Driver
+    from railroad_club.models.driver import Driver
 
     result = await session.exec(select(Driver).where(Driver.feed_id == feed.id))
     drivers = result.all()

@@ -7,12 +7,15 @@ dependencies = [
     "sqlmodel",
     "sqladmin[full]",
     "asyncpg",
-    "alembic",
     "redis[asyncio]",
     "pydantic-settings",
     "gtfs-realtime-bindings>=2.0.0",
     "celery[redis]",
+    "railroad-club",
 ]
+
+[tool.uv.sources]
+railroad-club = { git = "https://git.kcfam.us/gtfs.zone/railroad-club.git" }
 
 [dependency-groups]
 dev = [

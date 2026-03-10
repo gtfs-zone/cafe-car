@@ -8,7 +8,7 @@ from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
 from app.database import get_session_factory
-from app.models.user import User
+from railroad_club.models.user import User
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)

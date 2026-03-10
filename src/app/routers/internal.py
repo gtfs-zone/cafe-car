@@ -3,7 +3,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.database import get_session
-from app.models.feed import Feed
+from railroad_club.models.feed import Feed
 
 router = APIRouter()
 

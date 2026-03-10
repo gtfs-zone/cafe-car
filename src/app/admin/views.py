@@ -11,12 +11,12 @@ from wtforms import DateTimeLocalField, SelectField
 from wtforms.validators import URL, Length, Optional, Regexp
 
 from app.admin.context import current_subject_var
-from app.models.driver import Driver
-from app.models.feed import Feed
-from app.models.informed_entity import InformedEntity
-from app.models.service_alert import ServiceAlert
-from app.models.trip_alias import TripAlias
-from app.models.user import User
+from railroad_club.models.driver import Driver
+from railroad_club.models.feed import Feed
+from railroad_club.models.informed_entity import InformedEntity
+from railroad_club.models.service_alert import ServiceAlert
+from railroad_club.models.trip_alias import TripAlias
+from railroad_club.models.user import User
 
 _STATUS_BADGE = {
     "pending": '<span style="color:#f59e0b;font-weight:bold">pending</span>',

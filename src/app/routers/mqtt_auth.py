@@ -3,7 +3,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.database import get_session
-from app.models.driver import Driver
+from railroad_club.models.driver import Driver
 
 router = APIRouter(prefix="/mqtt")
 
