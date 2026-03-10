@@ -1044,7 +1044,7 @@ wheels = [
 ]
 
 [[package]]
-name = "redis-gtfs-rt-api"
+name = "cafe-car"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

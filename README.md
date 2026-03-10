@@ -1,4 +1,4 @@
-# redis-gtfs-rt-api
+# cafe-car
 
 Core API for [GTFS.Zone](https://gtfs.zone) — serves GTFS-RT protobuf feeds and provides an admin UI for managing feeds and drivers.
 

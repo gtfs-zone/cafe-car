@@ -31,7 +31,7 @@ def create_public_app() -> FastAPI:
     include_in_schema = settings.debug
 
     app = FastAPI(
-        title="redis-gtfs-rt-api",
+        title="cafe-car",
         lifespan=lifespan,
     )
 

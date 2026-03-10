@@ -1,5 +1,5 @@
 SHELL := /usr/bin/env sh
-REGISTRY := git.kcfam.us/gtfs.zone/redis-gtfs-rt-api
+REGISTRY := git.kcfam.us/gtfs.zone/cafe-car
 
 COMMIT := $(shell git rev-parse --short HEAD)
 TAG ?= $(COMMIT)
