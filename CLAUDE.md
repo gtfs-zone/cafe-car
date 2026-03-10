@@ -97,11 +97,6 @@ uv run fastapi dev src/app/main.py
 API docs: http://localhost:8000/docs
 Admin:    http://localhost:8000/admin
 
-Or use Docker Compose (includes Postgres and Redis):
-```bash
-docker compose up --build
-```
-
 To simulate oauth2-proxy headers locally:
 ```bash
 curl -H "X-Auth-Request-User: alice" -H "X-Auth-Request-Email: alice@example.com" \

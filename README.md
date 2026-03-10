@@ -28,13 +28,11 @@ Vehicle positions (`vehicle:{username}`) are published by [vehicle-poser](https:
 
 ## NanoMQ broker
 
-The `docker-compose.yml` includes a [NanoMQ](https://nanomq.io/) MQTT broker on port `1883`. Anonymous connections are disabled; authentication is delegated via HTTP POST to `/mqtt/auth` and ACL is checked via `/mqtt/acl` (both implemented by this service).
+A [NanoMQ](https://nanomq.io/) MQTT broker runs on port `1883` (configured via the deployment stack). Anonymous connections are disabled; authentication is delegated via HTTP POST to `/mqtt/auth` and ACL is checked via `/mqtt/acl` (both implemented by this service).
 
 ACL rules:
 - Users may only **publish** to `owntracks/{their_username}/#`
 - All clients may **subscribe** to `owntracks/#`
-
-Configuration lives in `dev/nanomq/nanomq.conf`.
 
 ---
 
@@ -54,26 +52,28 @@ All endpoints are unauthenticated. Feed names are configured via the admin UI.
 
 ## Local development
 
-Starts Postgres, Redis, the public API, admin app, NanoMQ, Dex, and oauth2-proxy:
+Requires a `.env` file:
 
-```bash
-docker compose up --build
+```
+DATABASE_URL=postgresql+asyncpg://postgres:mysecretpassword@localhost:5432/postgres
+REDIS_URL=redis://localhost:6379/1
+SESSION_SECRET_KEY=some-random-secret-key
 ```
 
-| Service | URL / Address |
-|---------|---------------|
-| Public API | http://localhost:8000 |
-| API docs | http://localhost:8000/docs |
-| Admin UI (via oauth2-proxy) | http://localhost:4180 |
-| Admin UI (direct, no auth) | http://localhost:8001 |
-| MQTT broker (NanoMQ) | localhost:1883 |
+Run Postgres and Redis externally (e.g. via the deployment stack), then:
 
-**Dev login credentials** (Dex static passwords — log in with email):
+```bash
+uv sync
+uv run fastapi dev src/app/main.py    # public API  → http://localhost:8000
+uv run fastapi dev src/app/admin_main.py  # admin app → http://localhost:8001
+```
 
-| Email | Password |
-|-------|----------|
-| alice@local | password |
-| bob@local | password |
+To simulate oauth2-proxy headers locally:
+
+```bash
+curl -H "X-Auth-Request-User: alice" -H "X-Auth-Request-Email: alice@example.com" \
+     http://localhost:8001/
+```
 
 ---
 
