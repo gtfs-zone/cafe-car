@@ -112,9 +112,9 @@ class FeedAdmin(ModelView, model=Feed):
             )
         ),
         "last_loaded_at": lambda m, a: (
-            m.gtfs_static_feed.last_loaded_at.strftime("%Y-%m-%d %H:%M UTC")
+            _fmt_utc_dt(m.gtfs_static_feed.last_loaded_at)
             if m.gtfs_static_feed and m.gtfs_static_feed.last_loaded_at
-            else "—"
+            else Markup("—")
         ),
         "reload_action": lambda m, a: Markup(
             f'<form method="post" action="/feeds/{m.id}/reload" style="margin:0">'
