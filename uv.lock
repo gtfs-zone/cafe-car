@@ -1024,6 +1024,17 @@ wheels = [
 ]
 
 [[package]]
+name = "railroad-club"
+version = "0.1.0"
+source = { git = "https://git.kcfam.us/gtfs.zone/railroad-club.git#878e8ca0adb194cec68cf63da3ac58501ed54387" }
+dependencies = [
+    { name = "alembic" },
+    { name = "asyncpg" },
+    { name = "pydantic-settings" },
+    { name = "sqlmodel" },
+]
+
+[[package]]
 name = "redis"
 version = "6.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1037,12 +1048,12 @@ name = "redis-gtfs-rt-api"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "alembic" },
     { name = "asyncpg" },
     { name = "celery", extra = ["redis"] },
     { name = "fastapi", extra = ["standard"] },
     { name = "gtfs-realtime-bindings" },
     { name = "pydantic-settings" },
+    { name = "railroad-club" },
     { name = "redis" },
     { name = "sqladmin", extra = ["full"] },
     { name = "sqlmodel" },
@@ -1060,12 +1071,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "alembic" },
     { name = "asyncpg" },
     { name = "celery", extras = ["redis"] },
     { name = "fastapi", extras = ["standard"] },
     { name = "gtfs-realtime-bindings", specifier = ">=2.0.0" },
     { name = "pydantic-settings" },
+    { name = "railroad-club", git = "https://git.kcfam.us/gtfs.zone/railroad-club.git" },
     { name = "redis", extras = ["asyncio"] },
     { name = "sqladmin", extras = ["full"] },
     { name = "sqlmodel" },
