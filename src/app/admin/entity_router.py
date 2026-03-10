@@ -13,6 +13,12 @@ from railroad_club.models.user import User
 
 router = APIRouter()
 
+
+@router.get("/")
+async def root_redirect():
+    return RedirectResponse(url="/feed/list")
+
+
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
