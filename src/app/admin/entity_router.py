@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +12,13 @@ from railroad_club.models.service_alert import ServiceAlert
 from railroad_club.models.user import User
 
 router = APIRouter()
+
+_STATIC_DIR = Path(__file__).parent / "static"
+
+
+@router.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return FileResponse(_STATIC_DIR / "favicon.svg", media_type="image/svg+xml")
 
 
 @router.get("/")
