@@ -13,11 +13,26 @@ e.g. owntracks/bob/WCCWB. Bus drivers set their OwnTracks device ID to their
 trip ID.
 
 Usage:
+    # List available routes in the GTFS zip:
+    uv run scripts/simulate_trip.py --list-routes
+
     # List available trips in the GTFS zip:
     uv run scripts/simulate_trip.py --list-trips
 
     # Simulate trip WCCWB at 10x speed, publishing every 2s:
     uv run scripts/simulate_trip.py --trip WCCWB
+
+    # Simulate two trips in parallel:
+    uv run scripts/simulate_trip.py --trip WCCWB --trip ELLSWB
+
+    # Simulate all trips for one or more routes:
+    uv run scripts/simulate_trip.py --route 1 --route 2
+
+    # Pick N random trips from the feed:
+    uv run scripts/simulate_trip.py --n-trips 10 --speed 20
+
+    # Simulate every trip (load test):
+    uv run scripts/simulate_trip.py --all-trips --speed 50 --quiet
 
     # Custom driver credentials, speed and interval:
     uv run scripts/simulate_trip.py --driver bob --password bob \\
@@ -34,6 +49,7 @@ import io
 import json
 import math
 import random
+import threading
 import time
 import zipfile
 import zoneinfo
@@ -59,6 +75,7 @@ def load_gtfs(zip_path: str) -> dict:
         "stop_times": read_table("stop_times.txt"),
         "stops": {r["stop_id"]: r for r in read_table("stops.txt")},
         "shapes": read_table("shapes.txt"),
+        "routes": {r["route_id"]: r for r in read_table("routes.txt")},
         "agency_timezone": agency_timezone,
     }
 
@@ -199,7 +216,31 @@ def main() -> int:
         default="example_data/west_gtfs.zip",
         help="Path to GTFS zip (default: example_data/west_gtfs.zip)",
     )
-    parser.add_argument("--trip", help="Trip ID to simulate (default: first trip in zip)")
+    parser.add_argument(
+        "--trip",
+        action="append",
+        default=[],
+        metavar="TRIP_ID",
+        help="Trip ID to simulate (repeatable: --trip A --trip B)",
+    )
+    parser.add_argument(
+        "--route",
+        action="append",
+        default=[],
+        metavar="ROUTE_ID",
+        help="Simulate all trips for route (repeatable)",
+    )
+    parser.add_argument(
+        "--n-trips",
+        type=int,
+        metavar="N",
+        help="Pick N random trips from the feed",
+    )
+    parser.add_argument(
+        "--all-trips",
+        action="store_true",
+        help="Simulate every trip in the GTFS zip",
+    )
     parser.add_argument("--driver", default="bob", help="Driver username / OwnTracks user (default: bob)")
     parser.add_argument("--password", default="bob", help="MQTT password (default: bob)")
     parser.add_argument("--broker", default="localhost", help="MQTT broker host (default: localhost)")
@@ -251,6 +292,11 @@ def main() -> int:
         action="store_true",
         help="List available trips in the GTFS zip and exit",
     )
+    parser.add_argument(
+        "--list-routes",
+        action="store_true",
+        help="List available routes in the GTFS zip and exit",
+    )
     args = parser.parse_args()
 
     if args.port is None:
@@ -258,9 +304,25 @@ def main() -> int:
 
     gtfs = load_gtfs(args.gtfs)
 
-    if args.list_trips:
-        print(f"Trips in {args.gtfs}:")
+    if args.list_routes:
+        print(f"Routes in {args.gtfs}:")
+        trips_by_route: dict[str, list] = {}
         for t in gtfs["trips"]:
+            trips_by_route.setdefault(t["route_id"], []).append(t["trip_id"])
+        for route_id, route in gtfs["routes"].items():
+            n_trips = len(trips_by_route.get(route_id, []))
+            short = route.get("route_short_name", "")
+            long = route.get("route_long_name", "")
+            name = f"{short} — {long}" if short and long else short or long
+            print(f"  {route_id:<20} {name:<40} trips={n_trips}")
+        return 0
+
+    if args.list_trips:
+        trips = gtfs["trips"]
+        if args.route:
+            trips = [t for t in trips if t["route_id"] in args.route]
+        print(f"Trips in {args.gtfs}" + (f" (route: {', '.join(args.route)})" if args.route else "") + ":")
+        for t in trips:
             n_stops = sum(1 for st in gtfs["stop_times"] if st["trip_id"] == t["trip_id"])
             stop_times_for_trip = sorted(
                 [st for st in gtfs["stop_times"] if st["trip_id"] == t["trip_id"]],
@@ -276,22 +338,57 @@ def main() -> int:
         return 0
 
     trips_by_id = {t["trip_id"]: t for t in gtfs["trips"]}
-    trip_id = args.trip or gtfs["trips"][0]["trip_id"]
-    if trip_id not in trips_by_id:
-        print(f"Error: trip '{trip_id}' not found. Use --list-trips to see available trips.")
+
+    # Resolve the set of trip IDs to simulate
+    trip_ids: set[str] = set()
+    for t in args.trip:
+        trip_ids.add(t)
+    for route in args.route:
+        trip_ids |= {t["trip_id"] for t in gtfs["trips"] if t["route_id"] == route}
+    if args.all_trips:
+        trip_ids = {t["trip_id"] for t in gtfs["trips"]}
+    if args.n_trips:
+        pool = list({t["trip_id"] for t in gtfs["trips"]} - trip_ids)
+        trip_ids |= set(random.sample(pool, min(args.n_trips, len(pool))))
+    if not trip_ids:
+        # Default: first trip (existing behaviour)
+        trip_ids = {gtfs["trips"][0]["trip_id"]}
+
+    # Validate all IDs
+    unknown = trip_ids - trips_by_id.keys()
+    if unknown:
+        print(f"Error: unknown trip IDs: {', '.join(sorted(unknown))}. Use --list-trips to see available trips.")
         return 1
 
+    threads = []
+    for tid in sorted(trip_ids):
+        t = threading.Thread(target=run_trip, args=(tid, gtfs, args), daemon=True)
+        threads.append(t)
+        t.start()
+
+    try:
+        for t in threads:
+            t.join()
+    except KeyboardInterrupt:
+        print("\nInterrupted — waiting for threads to finish.")
+
+    return 0
+
+
+def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
+    prefix = f"[{trip_id}]"
+    trips_by_id = {t["trip_id"]: t for t in gtfs["trips"]}
     trip = trips_by_id[trip_id]
     shape_id = trip["shape_id"]
-    route_id = trip["route_id"]  # for display only
+    route_id = trip["route_id"]
 
     delay_seconds = random.uniform(args.min_delay, args.max_delay)
 
     # Build shape polyline
     shape_rows = [r for r in gtfs["shapes"] if r["shape_id"] == shape_id]
     if not shape_rows:
-        print(f"Error: no shape points found for shape_id '{shape_id}'")
-        return 1
+        print(f"{prefix} Error: no shape points found for shape_id '{shape_id}'")
+        return
     shape_points, shape_dists = build_shape(shape_rows)
 
     # Load and sort stop times
@@ -300,23 +397,21 @@ def main() -> int:
         key=lambda r: int(r["stop_sequence"]),
     )
     if not stop_times:
-        print(f"Error: no stop times found for trip '{trip_id}'")
-        return 1
+        print(f"{prefix} Error: no stop times found for trip '{trip_id}'")
+        return
 
     # Build schedule: (absolute_seconds, shape_dist_m)
     stop_schedule = map_stops_to_shape(stop_times, gtfs["stops"], shape_points, shape_dists)
     trip_duration = stop_schedule[-1][0] - stop_schedule[0][0]
 
-    print(f"Trip:       {trip_id}  (route {route_id})")
-    print(f"Shape:      {shape_id}  ({len(shape_points)} pts, {shape_dists[-1] / 1000:.1f} km)")
-    print(f"Stops:      {len(stop_times)}")
-    print(f"Schedule:   {stop_times[0]['departure_time']} → {stop_times[-1]['arrival_time']}")
-    print(f"Duration:   {trip_duration // 60:.0f} min  ({trip_duration}s scheduled)")
-    print(f"Delay:      {args.min_delay:.0f}–{args.max_delay:.0f}s (random walk, drift ±{args.delay_drift:.0f}s/tick, starting {delay_seconds:.0f}s)")
-    print(f"Speed:      {args.speed}x  →  real runtime ≈ {trip_duration / args.speed / 60:.1f} min")
-    print(f"Interval:   {args.interval}s between publishes")
-    print(f"Timezone:   {gtfs['agency_timezone']}")
-    print(f"MQTT:       {args.broker}:{args.port}  topic=owntracks/{args.driver}/{trip_id}  tls={'yes' if args.tls else 'no'}")
+    print(f"{prefix} Trip:       {trip_id}  (route {route_id})")
+    print(f"{prefix} Shape:      {shape_id}  ({len(shape_points)} pts, {shape_dists[-1] / 1000:.1f} km)")
+    print(f"{prefix} Stops:      {len(stop_times)}")
+    print(f"{prefix} Schedule:   {stop_times[0]['departure_time']} → {stop_times[-1]['arrival_time']}")
+    print(f"{prefix} Duration:   {trip_duration // 60:.0f} min  ({trip_duration}s scheduled)")
+    print(f"{prefix} Delay:      {args.min_delay:.0f}–{args.max_delay:.0f}s (random walk, drift ±{args.delay_drift:.0f}s/tick, starting {delay_seconds:.0f}s)")
+    print(f"{prefix} Speed:      {args.speed}x  →  real runtime ≈ {trip_duration / args.speed / 60:.1f} min")
+    print(f"{prefix} MQTT:       {args.broker}:{args.port}  topic=owntracks/{args.driver}/{trip_id}  tls={'yes' if args.tls else 'no'}")
     print()
 
     # Connect MQTT
@@ -333,10 +428,10 @@ def main() -> int:
             keyfile=args.tls_key,
         )
 
-    print(f"Connecting to {args.broker}:{args.port}…")
+    print(f"{prefix} Connecting to {args.broker}:{args.port}…")
     client.connect(args.broker, args.port, keepalive=60)
     client.loop_start()
-    print("Connected. Starting simulation (Ctrl-C to stop).\n")
+    print(f"{prefix} Connected. Starting simulation (Ctrl-C to stop).\n")
 
     topic = f"owntracks/{args.driver}/{trip_id}"
     real_start = time.time()
@@ -349,7 +444,7 @@ def main() -> int:
             schedule_elapsed = real_elapsed * args.speed  # simulated seconds into trip
 
             if schedule_elapsed >= trip_duration:
-                print("Trip complete.")
+                print(f"{prefix} Trip complete.")
                 break
 
             # Position
@@ -388,7 +483,7 @@ def main() -> int:
             status = "✓" if result.rc == mqtt.MQTT_ERR_SUCCESS else f"ERR({result.rc})"
 
             print(
-                f"[{time.strftime('%H:%M:%S')}] {pct:5.1f}%  "
+                f"{prefix} [{time.strftime('%H:%M:%S')}] {pct:5.1f}%  "
                 f"stop {stop_idx + 1}/{len(stop_times)}  "
                 f"lat={lat:.5f}  lon={lon:.5f}  "
                 f"hdg={hdg:5.1f}°  spd={speed_kmh:5.1f} km/h  "
@@ -398,12 +493,10 @@ def main() -> int:
             time.sleep(args.interval)
 
     except KeyboardInterrupt:
-        print("\nInterrupted.")
+        pass
     finally:
         client.loop_stop()
         client.disconnect()
-
-    return 0
 
 
 if __name__ == "__main__":

@@ -56,35 +56,36 @@ async def trip_updates(
     seen_trip_ids: set[str] = set()
     entity_id = 0
     for driver in drivers:
-        vehicle_raw = await redis.get(f"vehicle:{driver.username}")
-        if vehicle_raw is None:
-            continue
-        vehicle_data = json.loads(vehicle_raw)
-        trip_id = vehicle_data.get("trip_id")
-        if not trip_id or trip_id in seen_trip_ids:
-            continue
+        async for key in redis.scan_iter(f"vehicle:{driver.username}:*"):
+            vehicle_raw = await redis.get(key)
+            if vehicle_raw is None:
+                continue
+            vehicle_data = json.loads(vehicle_raw)
+            trip_id = vehicle_data.get("trip_id")
+            if not trip_id or trip_id in seen_trip_ids:
+                continue
 
-        trip_raw = await redis.get(f"trip_update:{trip_id}")
-        if trip_raw is None:
-            continue
-        trip_data = json.loads(trip_raw)
+            trip_raw = await redis.get(f"trip_update:{trip_id}")
+            if trip_raw is None:
+                continue
+            trip_data = json.loads(trip_raw)
 
-        seen_trip_ids.add(trip_id)
-        entity_id += 1
-        entity = msg.entity.add()
-        entity.id = str(entity_id)
-        entity.trip_update.trip.trip_id = trip_data["trip_id"]
-        entity.trip_update.trip.schedule_relationship = (
-            gtfs_realtime_pb2.TripDescriptor.SCHEDULED
-        )
-        entity.trip_update.vehicle.id = trip_data["vehicle_id"]
-        entity.trip_update.timestamp = trip_data["timestamp"]
-        stu = entity.trip_update.stop_time_update.add()
-        stu.stop_sequence = trip_data["stop_sequence"]
-        stu.arrival.delay = trip_data["delay"]
-        stu.schedule_relationship = (
-            gtfs_realtime_pb2.TripUpdate.StopTimeUpdate.SCHEDULED
-        )
+            seen_trip_ids.add(trip_id)
+            entity_id += 1
+            entity = msg.entity.add()
+            entity.id = str(entity_id)
+            entity.trip_update.trip.trip_id = trip_data["trip_id"]
+            entity.trip_update.trip.schedule_relationship = (
+                gtfs_realtime_pb2.TripDescriptor.SCHEDULED
+            )
+            entity.trip_update.vehicle.id = trip_data["vehicle_id"]
+            entity.trip_update.timestamp = trip_data["timestamp"]
+            stu = entity.trip_update.stop_time_update.add()
+            stu.stop_sequence = trip_data["stop_sequence"]
+            stu.arrival.delay = trip_data["delay"]
+            stu.schedule_relationship = (
+                gtfs_realtime_pb2.TripUpdate.StopTimeUpdate.SCHEDULED
+            )
 
     return Response(content=msg.SerializeToString(), media_type=PROTOBUF_CONTENT_TYPE)
 
@@ -110,27 +111,27 @@ async def vehicle_positions(
 
     entity_id = 0
     for driver in drivers:
-        key = f"vehicle:{driver.username}"
-        raw = await redis.get(key)
-        if raw is None:
-            continue
-        data = json.loads(raw)
+        async for key in redis.scan_iter(f"vehicle:{driver.username}:*"):
+            raw = await redis.get(key)
+            if raw is None:
+                continue
+            data = json.loads(raw)
 
-        entity_id += 1
-        entity = msg.entity.add()
-        entity.id = str(entity_id)
-        entity.vehicle.vehicle.id = data["driver"]
-        entity.vehicle.vehicle.label = data["driver"]
-        entity.vehicle.position.latitude = data["lat"]
-        entity.vehicle.position.longitude = data["lon"]
-        entity.vehicle.position.bearing = data["bearing"]
-        entity.vehicle.position.speed = data["speed"]
-        entity.vehicle.trip.trip_id = alias_map.get(data["trip_id"], data["trip_id"])
-        entity.vehicle.trip.schedule_relationship = gtfs_realtime_pb2.TripDescriptor.SCHEDULED
-        if route_id := data.get("route_id"):
-            entity.vehicle.trip.route_id = route_id
-        entity.vehicle.current_status = gtfs_realtime_pb2.VehiclePosition.IN_TRANSIT_TO
-        entity.vehicle.timestamp = data["timestamp"]
+            entity_id += 1
+            entity = msg.entity.add()
+            entity.id = str(entity_id)
+            entity.vehicle.vehicle.id = data["driver"]
+            entity.vehicle.vehicle.label = data["driver"]
+            entity.vehicle.position.latitude = data["lat"]
+            entity.vehicle.position.longitude = data["lon"]
+            entity.vehicle.position.bearing = data["bearing"]
+            entity.vehicle.position.speed = data["speed"]
+            entity.vehicle.trip.trip_id = alias_map.get(data["trip_id"], data["trip_id"])
+            entity.vehicle.trip.schedule_relationship = gtfs_realtime_pb2.TripDescriptor.SCHEDULED
+            if route_id := data.get("route_id"):
+                entity.vehicle.trip.route_id = route_id
+            entity.vehicle.current_status = gtfs_realtime_pb2.VehiclePosition.IN_TRANSIT_TO
+            entity.vehicle.timestamp = data["timestamp"]
 
     return Response(content=msg.SerializeToString(), media_type=PROTOBUF_CONTENT_TYPE)
 
