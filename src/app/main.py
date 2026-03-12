@@ -6,9 +6,9 @@ from fastapi import FastAPI, Request
 from sqlalchemy import text
 
 from app.database import get_engine, get_session_factory
+from app.passwd_file import regenerate_passwd_file
 from app.routers.gtfs_rt import router as gtfs_rt_router
 from app.routers.internal import router as internal_router
-from app.routers.mqtt_auth import router as mqtt_auth_router
 from app.settings import get_settings
 
 
@@ -19,6 +19,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     redis = aioredis.from_url(str(settings.redis_url))
     await redis.ping()
     app.state.redis = redis
+    await regenerate_passwd_file()
 
     yield
 
@@ -36,7 +37,6 @@ def create_public_app() -> FastAPI:
     )
 
     app.include_router(gtfs_rt_router)
-    app.include_router(mqtt_auth_router, include_in_schema=include_in_schema)
     app.include_router(internal_router, include_in_schema=include_in_schema)
 
     @app.get("/health")

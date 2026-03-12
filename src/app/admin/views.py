@@ -11,6 +11,7 @@ from wtforms import DateTimeLocalField, SelectField
 from wtforms.validators import URL, Length, Optional, Regexp
 
 from app.admin.context import current_subject_var
+from app.passwd_file import regenerate_passwd_file
 from railroad_club.models.driver import Driver
 from railroad_club.models.feed import Feed
 from railroad_club.models.informed_entity import InformedEntity
@@ -300,6 +301,20 @@ class DriverAdmin(ModelView, model=Driver):
     async def delete_model(self, request: Request, pk: Any) -> None:
         await self._get_owned_driver(request, pk)
         await super().delete_model(request, pk)
+
+    async def after_model_change(
+        self, data: dict, model: Driver, is_created: bool, request: Request
+    ) -> None:
+        try:
+            await regenerate_passwd_file()
+        except Exception:
+            pass
+
+    async def after_model_delete(self, model: Driver, request: Request) -> None:
+        try:
+            await regenerate_passwd_file()
+        except Exception:
+            pass
 
 
 _OPTIONAL_ALERT_FIELDS = ("cause", "effect", "severity_level", "url")
