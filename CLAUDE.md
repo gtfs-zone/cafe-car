@@ -109,3 +109,4 @@ curl -H "X-Auth-Request-User: alice" -H "X-Auth-Request-Email: alice@example.com
 - Admin views must always scope queries to the authenticated user — never expose another user's Feeds or Drivers
 - Use `uv` for all package management (never `pip install` directly)
 - Run `uv run ruff check src/` before committing
+- Never add `Co-Authored-By: Claude ...` trailers to commit messages
