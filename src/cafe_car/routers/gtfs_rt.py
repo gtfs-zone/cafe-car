@@ -5,14 +5,14 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from google.transit import gtfs_realtime_pb2
+from railroad_club.models.feed import Feed
+from railroad_club.models.service_alert import ServiceAlert
+from railroad_club.models.trip_alias import TripAlias
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.database import get_session
-from railroad_club.models.feed import Feed
-from railroad_club.models.service_alert import ServiceAlert
-from railroad_club.models.trip_alias import TripAlias
+from cafe_car.database import get_session
 
 router = APIRouter()
 
@@ -24,7 +24,7 @@ async def _alias_map(feed_id: int, session: AsyncSession) -> dict[str, str]:
 PROTOBUF_CONTENT_TYPE = "application/x-protobuf"
 
 
-async def get_feed(  # noqa: B008
+async def get_feed(
     feed_name: str,
     session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> Feed:
@@ -126,11 +126,17 @@ async def vehicle_positions(
             entity.vehicle.position.longitude = data["lon"]
             entity.vehicle.position.bearing = data["bearing"]
             entity.vehicle.position.speed = data["speed"]
-            entity.vehicle.trip.trip_id = alias_map.get(data["trip_id"], data["trip_id"])
-            entity.vehicle.trip.schedule_relationship = gtfs_realtime_pb2.TripDescriptor.SCHEDULED
+            entity.vehicle.trip.trip_id = alias_map.get(
+                data["trip_id"], data["trip_id"]
+            )
+            entity.vehicle.trip.schedule_relationship = (
+                gtfs_realtime_pb2.TripDescriptor.SCHEDULED
+            )
             if route_id := data.get("route_id"):
                 entity.vehicle.trip.route_id = route_id
-            entity.vehicle.current_status = gtfs_realtime_pb2.VehiclePosition.IN_TRANSIT_TO
+            entity.vehicle.current_status = (
+                gtfs_realtime_pb2.VehiclePosition.IN_TRANSIT_TO
+            )
             entity.vehicle.timestamp = data["timestamp"]
 
     return Response(content=msg.SerializeToString(), media_type=PROTOBUF_CONTENT_TYPE)

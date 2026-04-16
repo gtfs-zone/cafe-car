@@ -1,23 +1,28 @@
+from __future__ import annotations
+
+import contextlib
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, ClassVar
 
 from markupsafe import Markup
-from sqladmin import ModelView
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
-from starlette.requests import Request
-from wtforms import DateTimeLocalField, SelectField
-from wtforms.validators import URL, Length, Optional, Regexp
-
-from app.admin.context import current_subject_var
-from app.passwd_file import regenerate_passwd_file
 from railroad_club.models.driver import Driver
 from railroad_club.models.feed import Feed
 from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
 from railroad_club.models.trip_alias import TripAlias
 from railroad_club.models.user import User
+from sqladmin import ModelView
+from sqlalchemy import Select, func, select
+from sqlalchemy.orm import selectinload
+from wtforms import DateTimeLocalField, SelectField
+from wtforms.validators import URL, Length, Optional, Regexp
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from starlette.requests import Request
+
+from cafe_car.admin.context import current_subject_var
+from cafe_car.passwd_file import regenerate_passwd_file
 
 _STATUS_BADGE = {
     "pending": '<span style="color:#f59e0b;font-weight:bold">pending</span>',
@@ -78,10 +83,10 @@ def _current_subject(request: Request) -> str:
 
 
 class FeedAdmin(ModelView, model=Feed):
-    form_args = {
+    form_args: ClassVar[dict] = {
         "feed_name": {
             "validators": [
-                Length(min=3, max=64, message="feed_name must be 3–64 characters"),
+                Length(min=3, max=64, message="feed_name must be 3-64 characters"),
                 Regexp(
                     r"^[a-z][a-z0-9_-]*$",
                     message="Must start with [a-z], then [a-z0-9_-] only",
@@ -92,20 +97,22 @@ class FeedAdmin(ModelView, model=Feed):
             "validators": [URL(message="Must be a valid http or https URL")]
         },
     }
-    column_list = [
+    column_list: ClassVar[list] = [
         Feed.feed_name,
         Feed.static_feed_url,
         "load_status_badge",
         "last_loaded_at",
         "reload_action",
     ]
-    column_labels = {
+    column_labels: ClassVar[dict] = {
         "load_status_badge": "Status",
         "last_loaded_at": "Last Loaded",
         "reload_action": "",
     }
-    column_formatters = {
-        Feed.feed_name: lambda m, a: Markup(f'<a href="/feed/edit/{m.id}">{m.feed_name}</a>'),
+    column_formatters: ClassVar[dict] = {
+        Feed.feed_name: (
+            lambda m, a: Markup(f'<a href="/feed/edit/{m.id}">{m.feed_name}</a>')
+        ),
         "load_status_badge": lambda m, a: Markup(
             _STATUS_BADGE.get(
                 m.gtfs_static_feed.status if m.gtfs_static_feed else "",
@@ -123,24 +130,26 @@ class FeedAdmin(ModelView, model=Feed):
             f"</form>"
         ),
     }
-    column_searchable_list = [Feed.feed_name]
-    form_excluded_columns = ["owner", "drivers", "alerts", "owner_id", "gtfs_static_feed", "aliases"]
+    column_searchable_list: ClassVar[list] = [Feed.feed_name]
+    form_excluded_columns: ClassVar[list] = [
+        "owner", "drivers", "alerts", "owner_id", "gtfs_static_feed", "aliases"
+    ]
     name = "Feed"
     name_plural = "Feeds"
 
-    def _base_query(self, subject: str):
+    def _base_query(self, subject: str) -> Select[tuple[Feed]]:
         return (
             select(Feed)
             .join(User, Feed.owner_id == User.id)
             .where(User.provider_subject == subject)
         )
 
-    def list_query(self, request: Request):
+    def list_query(self, request: Request) -> Select[tuple[Feed]]:
         return self._base_query(_current_subject(request)).options(
             selectinload(Feed.gtfs_static_feed)
         )
 
-    def count_query(self, request: Request):
+    def count_query(self, request: Request) -> Select[tuple[int]]:
         subject = _current_subject(request)
         return (
             select(func.count(Feed.id))
@@ -148,11 +157,11 @@ class FeedAdmin(ModelView, model=Feed):
             .where(User.provider_subject == subject)
         )
 
-    def details_query(self, request: Request):
+    def details_query(self, request: Request) -> Select[tuple[Feed]]:
         pk = request.path_params["pk"]
         return self._base_query(_current_subject(request)).where(Feed.id == int(pk))
 
-    def form_edit_query(self, request: Request):
+    def form_edit_query(self, request: Request) -> Select[tuple[Feed]]:
         pk = request.path_params["pk"]
         return self._base_query(_current_subject(request)).where(Feed.id == int(pk))
 
@@ -168,7 +177,7 @@ class FeedAdmin(ModelView, model=Feed):
         data["owner_id"] = owner.id
         return await super().insert_model(request, data)
 
-    async def _get_owned_feed(self, request: Request, pk: Any) -> Feed:
+    async def _get_owned_feed(self, request: Request, pk: str | int) -> Feed:
         subject = _current_subject(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
@@ -179,50 +188,50 @@ class FeedAdmin(ModelView, model=Feed):
             raise PermissionError("Feed not found or access denied")
         return feed
 
-    async def update_model(self, request: Request, pk: Any, data: dict) -> Feed:
+    async def update_model(self, request: Request, pk: str | int, data: dict) -> Feed:
         await self._get_owned_feed(request, pk)
         return await super().update_model(request, pk, data)
 
-    async def delete_model(self, request: Request, pk: Any) -> None:
+    async def delete_model(self, request: Request, pk: str | int) -> None:
         await self._get_owned_feed(request, pk)
         await super().delete_model(request, pk)
 
     async def after_model_change(
         self, data: dict, model: Feed, is_created: bool, request: Request
     ) -> None:
-        try:
-            from app.celery_client import celery_app
+        with contextlib.suppress(Exception):
+            from cafe_car.celery_client import celery_app
 
             celery_app.send_task("worker.tasks.load_feed", args=[model.id])
-        except Exception:
-            pass  # worker unavailable; task will be triggered manually
 
 
 class DriverAdmin(ModelView, model=Driver):
-    form_args = {
+    form_args: ClassVar[dict] = {
         "username": {
             "validators": [
-                Length(min=3, max=32, message="username must be 3–32 characters"),
+                Length(min=3, max=32, message="username must be 3-32 characters"),
                 Regexp(r"^[a-zA-Z0-9]+$", message="username must be alphanumeric only"),
             ]
         },
         "password": {
             "validators": [
-                Length(min=3, max=32, message="password must be 3–32 characters"),
+                Length(min=3, max=32, message="password must be 3-32 characters"),
                 Regexp(r"^[a-zA-Z0-9]+$", message="password must be alphanumeric only"),
             ]
         },
     }
-    column_list = [Driver.username, "feed"]
-    column_formatters = {
-        Driver.username: lambda m, a: Markup(f'<a href="/driver/edit/{m.id}">{m.username}</a>'),
+    column_list: ClassVar[list] = [Driver.username, "feed"]
+    column_formatters: ClassVar[dict] = {
+        Driver.username: (
+            lambda m, a: Markup(f'<a href="/driver/edit/{m.id}">{m.username}</a>')
+        ),
     }
-    column_searchable_list = [Driver.username]
-    form_excluded_columns = ["feed"]
+    column_searchable_list: ClassVar[list] = [Driver.username]
+    form_excluded_columns: ClassVar[list] = ["feed"]
     name = "Driver"
     name_plural = "Drivers"
 
-    async def scaffold_form(self, rules=None):
+    async def scaffold_form(self, rules: list | None = None) -> type:
         Form = await super().scaffold_form(rules)
         subject = current_subject_var.get()
         async with self.session_maker() as session:
@@ -239,7 +248,7 @@ class DriverAdmin(ModelView, model=Driver):
         )
         return Form
 
-    def _base_query(self, subject: str):
+    def _base_query(self, subject: str) -> Select[tuple[Driver]]:
         return (
             select(Driver)
             .join(Feed, Driver.feed_id == Feed.id)
@@ -247,10 +256,10 @@ class DriverAdmin(ModelView, model=Driver):
             .where(User.provider_subject == subject)
         )
 
-    def list_query(self, request: Request):
+    def list_query(self, request: Request) -> Select[tuple[Driver]]:
         return self._base_query(_current_subject(request))
 
-    def count_query(self, request: Request):
+    def count_query(self, request: Request) -> Select[tuple[int]]:
         subject = _current_subject(request)
         return (
             select(func.count(Driver.id))
@@ -259,11 +268,11 @@ class DriverAdmin(ModelView, model=Driver):
             .where(User.provider_subject == subject)
         )
 
-    def details_query(self, request: Request):
+    def details_query(self, request: Request) -> Select[tuple[Driver]]:
         pk = request.path_params["pk"]
         return self._base_query(_current_subject(request)).where(Driver.id == int(pk))
 
-    def form_edit_query(self, request: Request):
+    def form_edit_query(self, request: Request) -> Select[tuple[Driver]]:
         pk = request.path_params["pk"]
         return self._base_query(_current_subject(request)).where(Driver.id == int(pk))
 
@@ -283,7 +292,7 @@ class DriverAdmin(ModelView, model=Driver):
             raise PermissionError("Feed not found or access denied")
         return await super().insert_model(request, data)
 
-    async def _get_owned_driver(self, request: Request, pk: Any) -> Driver:
+    async def _get_owned_driver(self, request: Request, pk: str | int) -> Driver:
         subject = _current_subject(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
@@ -294,27 +303,25 @@ class DriverAdmin(ModelView, model=Driver):
             raise PermissionError("Driver not found or access denied")
         return driver
 
-    async def update_model(self, request: Request, pk: Any, data: dict) -> Driver:
+    async def update_model(
+        self, request: Request, pk: str | int, data: dict
+    ) -> Driver:
         await self._get_owned_driver(request, pk)
         return await super().update_model(request, pk, data)
 
-    async def delete_model(self, request: Request, pk: Any) -> None:
+    async def delete_model(self, request: Request, pk: str | int) -> None:
         await self._get_owned_driver(request, pk)
         await super().delete_model(request, pk)
 
     async def after_model_change(
         self, data: dict, model: Driver, is_created: bool, request: Request
     ) -> None:
-        try:
+        with contextlib.suppress(Exception):
             await regenerate_passwd_file()
-        except Exception:
-            pass
 
     async def after_model_delete(self, model: Driver, request: Request) -> None:
-        try:
+        with contextlib.suppress(Exception):
             await regenerate_passwd_file()
-        except Exception:
-            pass
 
 
 _OPTIONAL_ALERT_FIELDS = ("cause", "effect", "severity_level", "url")
@@ -337,7 +344,7 @@ class ServiceAlertAdmin(ModelView, model=ServiceAlert):
     edit_template = "sqladmin/service_alert_edit.html"
     details_template = "sqladmin/service_alert_detail.html"
 
-    form_args = {
+    form_args: ClassVar[dict] = {
         "header_text": {"validators": [Length(max=512)]},
         "description_text": {"validators": [Length(max=2048)]},
         "url": {
@@ -349,21 +356,23 @@ class ServiceAlertAdmin(ModelView, model=ServiceAlert):
         "active_period_start": {"label": "Active Period Start"},
         "active_period_end": {"label": "Active Period End"},
     }
-    form_overrides = {
+    form_overrides: ClassVar[dict] = {
         "cause": SelectField,
         "effect": SelectField,
         "severity_level": SelectField,
         "active_period_start": DateTimeLocalField,
         "active_period_end": DateTimeLocalField,
     }
-    column_formatters = {
-        ServiceAlert.active_period_start: lambda m, a: _fmt_utc_dt(m.active_period_start),
+    column_formatters: ClassVar[dict] = {
+        ServiceAlert.active_period_start: (
+            lambda m, a: _fmt_utc_dt(m.active_period_start)
+        ),
         ServiceAlert.active_period_end: lambda m, a: _fmt_utc_dt(m.active_period_end),
         "entity_summary": lambda m, a: Markup(
             "<br>".join(str(e) for e in m.entities) or "<em>none</em>"
         ),
     }
-    column_list = [
+    column_list: ClassVar[list] = [
         ServiceAlert.header_text,
         ServiceAlert.cause,
         ServiceAlert.effect,
@@ -373,13 +382,13 @@ class ServiceAlertAdmin(ModelView, model=ServiceAlert):
         "entity_summary",
         "feed",
     ]
-    column_labels = {"entity_summary": "Entities"}
-    column_searchable_list = [ServiceAlert.header_text]
-    form_excluded_columns = ["feed", "entities"]
+    column_labels: ClassVar[dict] = {"entity_summary": "Entities"}
+    column_searchable_list: ClassVar[list] = [ServiceAlert.header_text]
+    form_excluded_columns: ClassVar[list] = ["feed", "entities"]
     name = "Service Alert"
     name_plural = "Service Alerts"
 
-    async def scaffold_form(self, rules=None):
+    async def scaffold_form(self, rules: list | None = None) -> type:
         Form = await super().scaffold_form(rules)
         subject = current_subject_var.get()
         async with self.session_maker() as session:
@@ -396,7 +405,7 @@ class ServiceAlertAdmin(ModelView, model=ServiceAlert):
         )
         return Form
 
-    def _base_query(self, subject: str):
+    def _base_query(self, subject: str) -> Select[tuple[ServiceAlert]]:
         return (
             select(ServiceAlert)
             .join(Feed, ServiceAlert.feed_id == Feed.id)
@@ -404,12 +413,12 @@ class ServiceAlertAdmin(ModelView, model=ServiceAlert):
             .where(User.provider_subject == subject)
         )
 
-    def list_query(self, request: Request):
+    def list_query(self, request: Request) -> Select[tuple[ServiceAlert]]:
         return self._base_query(_current_subject(request)).options(
             selectinload(ServiceAlert.entities)
         )
 
-    def count_query(self, request: Request):
+    def count_query(self, request: Request) -> Select[tuple[int]]:
         subject = _current_subject(request)
         return (
             select(func.count(ServiceAlert.id))
@@ -418,12 +427,12 @@ class ServiceAlertAdmin(ModelView, model=ServiceAlert):
             .where(User.provider_subject == subject)
         )
 
-    def details_query(self, request: Request):
+    def details_query(self, request: Request) -> Select[tuple[ServiceAlert]]:
         pk = request.path_params["pk"]
         subject = _current_subject(request)
         return self._base_query(subject).where(ServiceAlert.id == int(pk))
 
-    def form_edit_query(self, request: Request):
+    def form_edit_query(self, request: Request) -> Select[tuple[ServiceAlert]]:
         pk = request.path_params["pk"]
         subject = _current_subject(request)
         return self._base_query(subject).where(ServiceAlert.id == int(pk))
@@ -446,7 +455,9 @@ class ServiceAlertAdmin(ModelView, model=ServiceAlert):
         _make_alert_datetimes_utc(data)
         return await super().insert_model(request, data)
 
-    async def _get_owned_alert(self, request: Request, pk: Any) -> ServiceAlert:
+    async def _get_owned_alert(
+        self, request: Request, pk: str | int
+    ) -> ServiceAlert:
         subject = _current_subject(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
@@ -457,13 +468,15 @@ class ServiceAlertAdmin(ModelView, model=ServiceAlert):
             raise PermissionError("Service alert not found or access denied")
         return alert
 
-    async def update_model(self, request: Request, pk: Any, data: dict) -> ServiceAlert:
+    async def update_model(
+        self, request: Request, pk: str | int, data: dict
+    ) -> ServiceAlert:
         await self._get_owned_alert(request, pk)
         _clear_empty_optional_fields(data)
         _make_alert_datetimes_utc(data)
         return await super().update_model(request, pk, data)
 
-    async def delete_model(self, request: Request, pk: Any) -> None:
+    async def delete_model(self, request: Request, pk: str | int) -> None:
         await self._get_owned_alert(request, pk)
         await super().delete_model(request, pk)
 
@@ -486,7 +499,7 @@ class InformedEntityAdmin(ModelView, model=InformedEntity):
     def is_visible(self, request: Request) -> bool:
         return False
 
-    column_list = [
+    column_list: ClassVar[list] = [
         "alert",
         InformedEntity.agency_id,
         InformedEntity.route_id,
@@ -498,11 +511,11 @@ class InformedEntityAdmin(ModelView, model=InformedEntity):
         InformedEntity.trip_start_time,
         InformedEntity.trip_start_date,
     ]
-    form_excluded_columns = ["alert"]
+    form_excluded_columns: ClassVar[list] = ["alert"]
     name = "Informed Entity"
     name_plural = "Informed Entities"
 
-    async def scaffold_form(self, rules=None):
+    async def scaffold_form(self, rules: list | None = None) -> type:
         Form = await super().scaffold_form(rules)
         subject = current_subject_var.get()
         async with self.session_maker() as session:
@@ -520,13 +533,13 @@ class InformedEntityAdmin(ModelView, model=InformedEntity):
         )
         Form.route_type = SelectField(
             "Route Type",
-            choices=[("", "—")] + _ROUTE_TYPE_CHOICES,
+            choices=[("", "—"), *_ROUTE_TYPE_CHOICES],
             coerce=lambda x: None if x == "" else int(x),
             validators=[Optional()],
         )
         return Form
 
-    def _base_query(self, subject: str):
+    def _base_query(self, subject: str) -> Select[tuple[InformedEntity]]:
         return (
             select(InformedEntity)
             .join(ServiceAlert, InformedEntity.service_alert_id == ServiceAlert.id)
@@ -535,10 +548,10 @@ class InformedEntityAdmin(ModelView, model=InformedEntity):
             .where(User.provider_subject == subject)
         )
 
-    def list_query(self, request: Request):
+    def list_query(self, request: Request) -> Select[tuple[InformedEntity]]:
         return self._base_query(_current_subject(request))
 
-    def count_query(self, request: Request):
+    def count_query(self, request: Request) -> Select[tuple[int]]:
         subject = _current_subject(request)
         return (
             select(func.count(InformedEntity.id))
@@ -548,12 +561,12 @@ class InformedEntityAdmin(ModelView, model=InformedEntity):
             .where(User.provider_subject == subject)
         )
 
-    def details_query(self, request: Request):
+    def details_query(self, request: Request) -> Select[tuple[InformedEntity]]:
         pk = request.path_params["pk"]
         subject = _current_subject(request)
         return self._base_query(subject).where(InformedEntity.id == int(pk))
 
-    def form_edit_query(self, request: Request):
+    def form_edit_query(self, request: Request) -> Select[tuple[InformedEntity]]:
         pk = request.path_params["pk"]
         subject = _current_subject(request)
         return self._base_query(subject).where(InformedEntity.id == int(pk))
@@ -578,7 +591,9 @@ class InformedEntityAdmin(ModelView, model=InformedEntity):
         await self._check_alert_ownership(request, int(alert_id))
         return await super().insert_model(request, data)
 
-    async def _get_owned_entity(self, request: Request, pk: Any) -> InformedEntity:
+    async def _get_owned_entity(
+        self, request: Request, pk: str | int
+    ) -> InformedEntity:
         subject = _current_subject(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
@@ -590,7 +605,7 @@ class InformedEntityAdmin(ModelView, model=InformedEntity):
         return entity
 
     async def update_model(
-        self, request: Request, pk: Any, data: dict
+        self, request: Request, pk: str | int, data: dict
     ) -> InformedEntity:
         await self._get_owned_entity(request, pk)
         alert_id = data.get("service_alert_id")
@@ -598,32 +613,32 @@ class InformedEntityAdmin(ModelView, model=InformedEntity):
             await self._check_alert_ownership(request, int(alert_id))
         return await super().update_model(request, pk, data)
 
-    async def delete_model(self, request: Request, pk: Any) -> None:
+    async def delete_model(self, request: Request, pk: str | int) -> None:
         await self._get_owned_entity(request, pk)
         await super().delete_model(request, pk)
 
 
 class TripAliasAdmin(ModelView, model=TripAlias):
-    form_args = {
+    form_args: ClassVar[dict] = {
         "alias": {
             "validators": [
-                Length(min=1, max=64, message="alias must be 1–64 characters"),
+                Length(min=1, max=64, message="alias must be 1-64 characters"),
                 Regexp(r"^[a-zA-Z0-9]+$", message="alias must be alphanumeric only"),
             ]
         },
         "trip_id": {
             "validators": [
-                Length(min=1, max=256, message="trip_id must be 1–256 characters")
+                Length(min=1, max=256, message="trip_id must be 1-256 characters")
             ]
         },
     }
-    column_list = [TripAlias.alias, TripAlias.trip_id, "feed"]
-    column_searchable_list = [TripAlias.alias, TripAlias.trip_id]
-    form_excluded_columns = ["feed"]
+    column_list: ClassVar[list] = [TripAlias.alias, TripAlias.trip_id, "feed"]
+    column_searchable_list: ClassVar[list] = [TripAlias.alias, TripAlias.trip_id]
+    form_excluded_columns: ClassVar[list] = ["feed"]
     name = "Trip Alias"
     name_plural = "Trip Aliases"
 
-    async def scaffold_form(self, rules=None):
+    async def scaffold_form(self, rules: list | None = None) -> type:
         Form = await super().scaffold_form(rules)
         subject = current_subject_var.get()
         async with self.session_maker() as session:
@@ -640,7 +655,7 @@ class TripAliasAdmin(ModelView, model=TripAlias):
         )
         return Form
 
-    def _base_query(self, subject: str):
+    def _base_query(self, subject: str) -> Select[tuple[TripAlias]]:
         return (
             select(TripAlias)
             .join(Feed, TripAlias.feed_id == Feed.id)
@@ -648,10 +663,10 @@ class TripAliasAdmin(ModelView, model=TripAlias):
             .where(User.provider_subject == subject)
         )
 
-    def list_query(self, request: Request):
+    def list_query(self, request: Request) -> Select[tuple[TripAlias]]:
         return self._base_query(_current_subject(request))
 
-    def count_query(self, request: Request):
+    def count_query(self, request: Request) -> Select[tuple[int]]:
         subject = _current_subject(request)
         return (
             select(func.count(TripAlias.id))
@@ -660,12 +675,12 @@ class TripAliasAdmin(ModelView, model=TripAlias):
             .where(User.provider_subject == subject)
         )
 
-    def details_query(self, request: Request):
+    def details_query(self, request: Request) -> Select[tuple[TripAlias]]:
         pk = request.path_params["pk"]
         subject = _current_subject(request)
         return self._base_query(subject).where(TripAlias.id == int(pk))
 
-    def form_edit_query(self, request: Request):
+    def form_edit_query(self, request: Request) -> Select[tuple[TripAlias]]:
         pk = request.path_params["pk"]
         subject = _current_subject(request)
         return self._base_query(subject).where(TripAlias.id == int(pk))
@@ -686,7 +701,7 @@ class TripAliasAdmin(ModelView, model=TripAlias):
             raise PermissionError("Feed not found or access denied")
         return await super().insert_model(request, data)
 
-    async def _get_owned_alias(self, request: Request, pk: Any) -> TripAlias:
+    async def _get_owned_alias(self, request: Request, pk: str | int) -> TripAlias:
         subject = _current_subject(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
@@ -697,10 +712,12 @@ class TripAliasAdmin(ModelView, model=TripAlias):
             raise PermissionError("Trip alias not found or access denied")
         return alias
 
-    async def update_model(self, request: Request, pk: Any, data: dict) -> TripAlias:
+    async def update_model(
+        self, request: Request, pk: str | int, data: dict
+    ) -> TripAlias:
         await self._get_owned_alias(request, pk)
         return await super().update_model(request, pk, data)
 
-    async def delete_model(self, request: Request, pk: Any) -> None:
+    async def delete_model(self, request: Request, pk: str | int) -> None:
         await self._get_owned_alias(request, pk)
         await super().delete_model(request, pk)

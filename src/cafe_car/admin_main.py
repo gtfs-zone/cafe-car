@@ -5,32 +5,37 @@ from pathlib import Path
 import redis.asyncio as aioredis
 from fastapi import FastAPI, Request
 from sqladmin import Admin
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import Response
 
-from app.admin.auth import OIDCAuthBackend
-from app.admin.context import current_subject_var
-from app.admin.entity_router import router as entity_router
-from app.admin.views import (
+from cafe_car.admin.auth import OIDCAuthBackend
+from cafe_car.admin.context import current_subject_var
+from cafe_car.admin.entity_router import router as entity_router
+from cafe_car.admin.views import (
     DriverAdmin,
     FeedAdmin,
     InformedEntityAdmin,
     ServiceAlertAdmin,
     TripAliasAdmin,
 )
-from app.database import get_engine, get_session_factory
-from app.settings import get_settings
+from cafe_car.database import get_engine, get_session_factory
+from cafe_car.settings import get_settings
 
 
 class DBSessionMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
         async with get_session_factory()() as session:
             request.state.session = session
             return await call_next(request)
 
 
 class SubjectMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
         current_subject_var.set(request.session.get("subject", ""))
         return await call_next(request)
 
@@ -66,7 +71,13 @@ def create_admin_app() -> FastAPI:
 
     auth_backend = OIDCAuthBackend(secret_key=settings.session_secret_key)
     templates_dir = str(Path(__file__).parent / "admin" / "templates")
-    admin = Admin(app, engine=get_engine(), authentication_backend=auth_backend, base_url="/", templates_dir=templates_dir)
+    admin = Admin(
+        app,
+        engine=get_engine(),
+        authentication_backend=auth_backend,
+        base_url="/",
+        templates_dir=templates_dir,
+    )
     admin.add_view(FeedAdmin)
     admin.add_view(DriverAdmin)
     admin.add_view(TripAliasAdmin)

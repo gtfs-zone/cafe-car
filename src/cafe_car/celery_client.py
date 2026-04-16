@@ -1,6 +1,6 @@
 from celery import Celery
 
-from app.settings import get_settings
+from cafe_car.settings import get_settings
 
 
 def _make_celery() -> Celery:

@@ -1,10 +1,10 @@
 from collections.abc import AsyncGenerator
 
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.settings import get_settings
+from cafe_car.settings import get_settings
 
 _engine = None
 
@@ -16,7 +16,7 @@ def _asyncpg_url(url: str) -> str:
     return url
 
 
-def get_engine():
+def get_engine() -> AsyncEngine:
     global _engine
     if _engine is None:
         settings = get_settings()
@@ -27,7 +27,7 @@ def get_engine():
     return _engine
 
 
-def get_session_factory():
+def get_session_factory() -> sessionmaker[AsyncSession]:
     return sessionmaker(
         bind=get_engine(),
         class_=AsyncSession,
