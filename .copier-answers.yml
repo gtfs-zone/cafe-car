@@ -1,5 +1,5 @@
 # Changes here will be overwritten by Copier; do not edit manually.
-_commit: 20cd91d
+_commit: v0.1.0-1-g674b1a0
 _src_path: /home/maxtkc/Documents/bare-chassis
 description: Core API for GTFS.Zone — serves GTFS-RT protobuf feeds and provides an
     admin UI

@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # ---
 
-FROM python:3.13-bookworm-slim
+FROM python:3.13-slim-bookworm
 
 WORKDIR /app
 
@@ -29,6 +29,8 @@ COPY --from=builder /app/src /app/src
 
 ENV PATH="/app/.venv/bin:$PATH"
 
+RUN mkdir -p /run/nanomq && chown bridge:bridge /run/nanomq
+
 USER bridge
 
-CMD ["fastapi", "run", "src/app/main.py", "--port", "8000"]
+CMD ["fastapi", "run", "src/cafe_car/main.py", "--port", "8000"]
