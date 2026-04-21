@@ -3,13 +3,12 @@ from pathlib import Path
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from railroad_club.models.feed import Feed
 from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
 from railroad_club.models.user import User
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
 
@@ -17,12 +16,12 @@ _STATIC_DIR = Path(__file__).parent / "static"
 
 
 @router.get("/favicon.ico", include_in_schema=False)
-async def favicon():
+async def favicon() -> FileResponse:
     return FileResponse(_STATIC_DIR / "favicon.svg", media_type="image/svg+xml")
 
 
 @router.get("/")
-async def root_redirect():
+async def root_redirect() -> RedirectResponse:
     return RedirectResponse(url="/feed/list")
 
 
@@ -155,7 +154,7 @@ async def reload_feed(request: Request, feed_id: int) -> RedirectResponse:
     if result.scalar_one_or_none() is None:
         return HTMLResponse("Not found or access denied", status_code=403)
     try:
-        from app.celery_client import celery_app
+        from cafe_car.celery_client import celery_app
 
         celery_app.send_task("worker.tasks.load_feed", args=[feed_id])
     except Exception:

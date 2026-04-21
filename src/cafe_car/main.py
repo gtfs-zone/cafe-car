@@ -5,11 +5,11 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI, Request
 from sqlalchemy import text
 
-from app.database import get_engine, get_session_factory
-from app.passwd_file import regenerate_passwd_file
-from app.routers.gtfs_rt import router as gtfs_rt_router
-from app.routers.internal import router as internal_router
-from app.settings import get_settings
+from cafe_car.database import get_engine, get_session_factory
+from cafe_car.passwd_file import regenerate_passwd_file
+from cafe_car.routers.gtfs_rt import router as gtfs_rt_router
+from cafe_car.routers.internal import router as internal_router
+from cafe_car.settings import get_settings
 
 
 @asynccontextmanager
@@ -40,7 +40,7 @@ def create_public_app() -> FastAPI:
     app.include_router(internal_router, include_in_schema=include_in_schema)
 
     @app.get("/health")
-    async def health(request: Request):
+    async def health(request: Request) -> dict[str, str]:
         redis: aioredis.Redis = request.app.state.redis
         await redis.ping()
         async with get_session_factory()() as session:

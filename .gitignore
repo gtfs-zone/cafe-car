@@ -1,5 +1,13 @@
+.env
+.envrc
+*.log
+.DS_Store
+
 .venv/
 __pycache__/
-*.py[cod]
-.env
+*.pyc
+.pytest_cache/
 .ruff_cache/
+dist/
+*.egg-info/
+

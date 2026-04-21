@@ -1,0 +1,11 @@
+# Changes here will be overwritten by Copier; do not edit manually.
+_commit: v0.1.0-1-g674b1a0
+_src_path: /home/maxtkc/Documents/bare-chassis
+description: Core API for GTFS.Zone — serves GTFS-RT protobuf feeds and provides an
+    admin UI
+docker_base: bookworm
+entrypoint_module: cafe_car.main
+package_name: cafe_car
+project_name: Cafe Car
+project_slug: cafe-car
+project_type: web_api

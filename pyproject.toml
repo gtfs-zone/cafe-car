@@ -2,6 +2,7 @@
 name = "cafe-car"
 version = "0.1.0"
 requires-python = ">=3.13"
+description = "Core API for GTFS.Zone — serves GTFS-RT protobuf feeds and provides an admin UI"
 dependencies = [
     "fastapi[standard]",
     "sqlmodel",
@@ -27,12 +28,22 @@ dev = [
     "httpx",
 ]
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cafe_car"]
+
 [tool.ruff]
 target-version = "py313"
 line-length = 88
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "TCH", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/cafe_car/__init__.py" = ["F401"]
 
 [tool.commitizen]
 name = "cz_conventional_commits"
