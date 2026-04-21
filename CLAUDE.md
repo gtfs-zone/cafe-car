@@ -1,8 +1,4 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-# cafe-car
+# cafe-car — Claude Guide
 
 ## Project Overview
 
@@ -11,6 +7,22 @@ FastAPI service that:
 - Manages config data (Feeds, Drivers) in PostgreSQL via SQLModel + Alembic
 - Exposes GTFS-RT protobuf endpoints (`/<feed_name>/*.pb`) for trip updates, vehicle positions, and service alerts
 - Provides a scoped SQLAdmin interface at `/admin` where every authenticated user can only see their own Feeds and associated Drivers
+
+## Commands
+
+```bash
+uv sync              # install dependencies
+ruff check .         # lint
+ruff format .        # format
+pre-commit install   # install git hooks
+```
+
+```bash
+uv run ruff check src/          # lint
+uv run ruff check --fix src/    # lint + autofix
+uv run pytest                   # run all tests
+uv run pytest tests/test_foo.py::test_bar  # single test
+```
 
 ## Architecture
 
@@ -58,15 +70,6 @@ The current user identity flows via `request.session["subject"]` (set in `OIDCAu
 
 Vehicle positions are stored at key `vehicle:{driver.username}` as JSON with fields: `driver`, `lat`, `lon`, `bearing`, `speed`, `trip_id`, `route_id` (optional), `timestamp`.
 
-## Linting & Tests
-
-```bash
-uv run ruff check src/          # lint
-uv run ruff check --fix src/    # lint + autofix
-uv run pytest                   # run all tests
-uv run pytest tests/test_foo.py::test_bar  # single test
-```
-
 ## Alembic Workflow
 
 ```bash
@@ -103,10 +106,58 @@ curl -H "X-Auth-Request-User: alice" -H "X-Auth-Request-Email: alice@example.com
      http://localhost:8000/admin
 ```
 
-## Important Rules
+## Environment Variables
 
+| Variable | Description |
+|---|---|
+| `DATABASE_URL` | PostgreSQL connection string, e.g. `postgresql+asyncpg://postgres:password@localhost:5432/cafe-car` |
+| `REDIS_URL` | Redis connection string, e.g. `redis://localhost:6379/1` |
+| `SESSION_SECRET_KEY` | Secret key for signing sessions |
+
+## Rules
+
+- Never include `Co-Authored-By: Claude ...` trailers in commit messages.
+- Only read files within this repo's directory. Do not access parent directories or sibling repos.
 - Never create a stop_time with null departure and arrival
 - Admin views must always scope queries to the authenticated user — never expose another user's Feeds or Drivers
 - Use `uv` for all package management (never `pip install` directly)
 - Run `uv run ruff check src/` before committing
-- Never add `Co-Authored-By: Claude ...` trailers to commit messages
+
+## Related Repos
+
+| Repo | Description | URL |
+|---|---|---|
+| cafe-car | GTFS-RT HTTP API serving real-time feeds | https://git.kcfam.us/gtfs.zone/cafe-car |
+| vehicle-poser | Worker that tracks and posts vehicle positions | https://git.kcfam.us/gtfs.zone/vehicle-poser |
+| trip-updogger | Worker that generates trip update predictions | https://git.kcfam.us/gtfs.zone/trip-updogger |
+| schedule-foamer | Worker that ingests and processes GTFS schedule data | https://git.kcfam.us/gtfs.zone/schedule-foamer |
+| railroad-club | Shared Python library for GTFS types and utilities | https://git.kcfam.us/gtfs.zone/railroad-club |
+| music-student | Orchestration repo for deployments and infra | https://git.kcfam.us/gtfs.zone/music-student |
+| landing-zone | Static marketing/status site | https://git.kcfam.us/gtfs.zone/landing-zone |
+
+## Forgejo Workflow
+
+This project uses an offline-first workflow. Claude reads/writes `CURRENT_PLAN.md` locally and only touches Forgejo when explicitly asked.
+
+### Making a plan (triggered by "make a plan for issue #N" or "let's plan X")
+
+1. If the user said "fetch issue #N", use `mcp__forgejo__get_issue_by_index` with `owner: "gtfs.zone"`, `repo: "cafe-car"` to retrieve the issue body; otherwise work from the context provided
+2. Explore the codebase as needed
+3. Ask clarifying questions inline; wait for answers before writing
+4. Write the plan to `CURRENT_PLAN.md` in the repo root (format: Summary, Relevant Context, numbered Phases each with prose + checklist + gotchas)
+5. Do not start implementation
+
+### Completing a phase (triggered by "complete phase N" or "do phase N")
+
+1. Read `CURRENT_PLAN.md` directly — do not fetch from Forgejo
+2. Implement everything in the phase; commit as you go with conventional commits
+3. After completing, update `CURRENT_PLAN.md`: check off completed items, append discoveries to that phase's prose
+4. Do not update the Forgejo issue; do not start the next phase; stop for user review
+
+### Updating Forgejo (triggered by "update issue #N")
+
+1. Use `mcp__forgejo__update_issue` to overwrite the issue body with the current contents of `CURRENT_PLAN.md`
+
+### Creating a PR (triggered by "make a PR closing #N")
+
+1. Use `mcp__forgejo__create_pull_request` with `owner: "gtfs.zone"`, `repo: "cafe-car"`, current branch as `head`, `main` as `base`, issue title as PR title, `Closes #N` as body
