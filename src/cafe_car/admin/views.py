@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from markupsafe import Markup
 from railroad_club.models.driver import Driver
+from railroad_club.models.driver_rule import DriverRule
 from railroad_club.models.feed import Feed
 from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
@@ -720,4 +721,117 @@ class TripAliasAdmin(ModelView, model=TripAlias):
 
     async def delete_model(self, request: Request, pk: str | int) -> None:
         await self._get_owned_alias(request, pk)
+        await super().delete_model(request, pk)
+
+
+class DriverRuleAdmin(ModelView, model=DriverRule):
+    column_list: ClassVar[list] = [
+        "driver",
+        DriverRule.trip_id,
+        DriverRule.monday,
+        DriverRule.tuesday,
+        DriverRule.wednesday,
+        DriverRule.thursday,
+        DriverRule.friday,
+        DriverRule.saturday,
+        DriverRule.sunday,
+        DriverRule.start_time,
+        DriverRule.end_time,
+    ]
+    column_searchable_list: ClassVar[list] = [DriverRule.trip_id]
+    form_excluded_columns: ClassVar[list] = ["driver"]
+    name = "Driver Rule"
+    name_plural = "Driver Rules"
+
+    async def scaffold_form(self, rules: list | None = None) -> type:
+        Form = await super().scaffold_form(rules)
+        subject = current_subject_var.get()
+        async with self.session_maker() as session:
+            result = await session.execute(
+                select(Driver)
+                .join(Feed, Driver.feed_id == Feed.id)
+                .join(User, Feed.owner_id == User.id)
+                .where(User.provider_subject == subject)
+                .order_by(Driver.username)
+            )
+            drivers = result.scalars().all()
+        Form.driver_id = SelectField(
+            "Driver",
+            choices=[(d.id, d.username) for d in drivers],
+            coerce=int,
+        )
+        return Form
+
+    def _base_query(self, subject: str) -> Select[tuple[DriverRule]]:
+        return (
+            select(DriverRule)
+            .join(Driver, DriverRule.driver_id == Driver.id)
+            .join(Feed, Driver.feed_id == Feed.id)
+            .join(User, Feed.owner_id == User.id)
+            .where(User.provider_subject == subject)
+        )
+
+    def list_query(self, request: Request) -> Select[tuple[DriverRule]]:
+        return self._base_query(_current_subject(request))
+
+    def count_query(self, request: Request) -> Select[tuple[int]]:
+        subject = _current_subject(request)
+        return (
+            select(func.count(DriverRule.id))
+            .join(Driver, DriverRule.driver_id == Driver.id)
+            .join(Feed, Driver.feed_id == Feed.id)
+            .join(User, Feed.owner_id == User.id)
+            .where(User.provider_subject == subject)
+        )
+
+    def details_query(self, request: Request) -> Select[tuple[DriverRule]]:
+        pk = request.path_params["pk"]
+        return self._base_query(_current_subject(request)).where(
+            DriverRule.id == int(pk)
+        )
+
+    def form_edit_query(self, request: Request) -> Select[tuple[DriverRule]]:
+        pk = request.path_params["pk"]
+        return self._base_query(_current_subject(request)).where(
+            DriverRule.id == int(pk)
+        )
+
+    async def insert_model(self, request: Request, data: dict) -> DriverRule:
+        subject = _current_subject(request)
+        session: AsyncSession = request.state.session
+        driver_id = data.get("driver_id")
+        if not driver_id:
+            raise ValueError("A driver must be selected")
+        result = await session.execute(
+            select(Driver)
+            .join(Feed, Driver.feed_id == Feed.id)
+            .join(User, Feed.owner_id == User.id)
+            .where(User.provider_subject == subject)
+            .where(Driver.id == driver_id)
+        )
+        if result.scalar_one_or_none() is None:
+            raise PermissionError("Driver not found or access denied")
+        return await super().insert_model(request, data)
+
+    async def _get_owned_rule(
+        self, request: Request, pk: str | int
+    ) -> DriverRule:
+        subject = _current_subject(request)
+        session: AsyncSession = request.state.session
+        result = await session.execute(
+            self._base_query(subject).where(DriverRule.id == int(pk))
+        )
+        rule = result.scalar_one_or_none()
+        if rule is None:
+            raise PermissionError("Driver rule not found or access denied")
+        return rule
+
+    async def update_model(
+        self, request: Request, pk: str | int, data: dict
+    ) -> DriverRule:
+        await self._get_owned_rule(request, pk)
+        return await super().update_model(request, pk, data)
+
+    async def delete_model(self, request: Request, pk: str | int) -> None:
+        await self._get_owned_rule(request, pk)
         await super().delete_model(request, pk)

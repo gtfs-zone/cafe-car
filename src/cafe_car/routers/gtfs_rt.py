@@ -124,8 +124,10 @@ async def vehicle_positions(
             entity.vehicle.vehicle.label = data["driver"]
             entity.vehicle.position.latitude = data["lat"]
             entity.vehicle.position.longitude = data["lon"]
-            entity.vehicle.position.bearing = data["bearing"]
-            entity.vehicle.position.speed = data["speed"]
+            if data["bearing"] is not None:
+                entity.vehicle.position.bearing = data["bearing"]
+            if data["speed"] is not None:
+                entity.vehicle.position.speed = data["speed"]
             entity.vehicle.trip.trip_id = alias_map.get(
                 data["trip_id"], data["trip_id"]
             )

@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from cafe_car.database import get_engine, get_session_factory
@@ -35,6 +36,14 @@ def create_public_app() -> FastAPI:
         title="cafe-car",
         lifespan=lifespan,
     )
+
+    if settings.cors_allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_allowed_origins,
+            allow_methods=["GET"],
+            allow_headers=["*"],
+        )
 
     app.include_router(gtfs_rt_router)
     app.include_router(internal_router, include_in_schema=include_in_schema)
