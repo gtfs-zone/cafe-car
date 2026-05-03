@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     oauth2_proxy_logout_url: str = "/oauth2/sign_out"
     debug: bool = False
     celery_broker_url: str = "redis://redis:6379/3"
+    cors_allowed_origins: list[str] = []
 
     model_config = SettingsConfigDict(env_file=".env")
 

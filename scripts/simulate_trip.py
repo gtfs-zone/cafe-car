@@ -297,6 +297,11 @@ def main() -> int:
         action="store_true",
         help="List available routes in the GTFS zip and exit",
     )
+    parser.add_argument(
+        "--override-trip-id",
+        metavar="TRIP_ID",
+        help="Publish under this trip ID instead of the GTFS trip ID (geometry still comes from --trip)",
+    )
     args = parser.parse_args()
 
     if args.port is None:
@@ -360,6 +365,10 @@ def main() -> int:
         print(f"Error: unknown trip IDs: {', '.join(sorted(unknown))}. Use --list-trips to see available trips.")
         return 1
 
+    if args.override_trip_id and len(trip_ids) > 1:
+        print("Error: --override-trip-id can only be used with a single --trip.")
+        return 1
+
     threads = []
     for tid in sorted(trip_ids):
         t = threading.Thread(target=run_trip, args=(tid, gtfs, args), daemon=True)
@@ -376,7 +385,8 @@ def main() -> int:
 
 
 def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
-    prefix = f"[{trip_id}]"
+    published_trip_id = args.override_trip_id or trip_id
+    prefix = f"[{published_trip_id}]"
     trips_by_id = {t["trip_id"]: t for t in gtfs["trips"]}
     trip = trips_by_id[trip_id]
     shape_id = trip["shape_id"]
@@ -404,14 +414,15 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
     stop_schedule = map_stops_to_shape(stop_times, gtfs["stops"], shape_points, shape_dists)
     trip_duration = stop_schedule[-1][0] - stop_schedule[0][0]
 
-    print(f"{prefix} Trip:       {trip_id}  (route {route_id})")
+    gtfs_label = f"{trip_id} → {published_trip_id}" if published_trip_id != trip_id else trip_id
+    print(f"{prefix} Trip:       {gtfs_label}  (route {route_id})")
     print(f"{prefix} Shape:      {shape_id}  ({len(shape_points)} pts, {shape_dists[-1] / 1000:.1f} km)")
     print(f"{prefix} Stops:      {len(stop_times)}")
     print(f"{prefix} Schedule:   {stop_times[0]['departure_time']} → {stop_times[-1]['arrival_time']}")
     print(f"{prefix} Duration:   {trip_duration // 60:.0f} min  ({trip_duration}s scheduled)")
     print(f"{prefix} Delay:      {args.min_delay:.0f}–{args.max_delay:.0f}s (random walk, drift ±{args.delay_drift:.0f}s/tick, starting {delay_seconds:.0f}s)")
     print(f"{prefix} Speed:      {args.speed}x  →  real runtime ≈ {trip_duration / args.speed / 60:.1f} min")
-    print(f"{prefix} MQTT:       {args.broker}:{args.port}  topic=owntracks/{args.driver}/{trip_id}  tls={'yes' if args.tls else 'no'}")
+    print(f"{prefix} MQTT:       {args.broker}:{args.port}  topic=owntracks/{args.driver}/{published_trip_id}  tls={'yes' if args.tls else 'no'}")
     print()
 
     # Connect MQTT
@@ -433,7 +444,7 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
     client.loop_start()
     print(f"{prefix} Connected. Starting simulation (Ctrl-C to stop).\n")
 
-    topic = f"owntracks/{args.driver}/{trip_id}"
+    topic = f"owntracks/{args.driver}/{published_trip_id}"
     real_start = time.time()
     tz = zoneinfo.ZoneInfo(gtfs["agency_timezone"])
     today_midnight = int(datetime.datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
