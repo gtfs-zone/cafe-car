@@ -210,7 +210,7 @@ def current_stop_index(schedule_elapsed: float, stop_schedule: list[tuple[int, f
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Simulate a GTFS trip and publish vehicle positions to MQTT."
+        description="Simulate a GTFS trip and publish positions + trip-updates to cafe-car ingest."
     )
     parser.add_argument(
         "--gtfs",
@@ -263,7 +263,7 @@ def main() -> int:
         "--interval",
         type=float,
         default=2.0,
-        help="Real-time seconds between MQTT publishes (default: 2)",
+        help="Real-time seconds between ingest publishes (default: 2)",
     )
     parser.add_argument(
         "--min-delay",
@@ -426,7 +426,8 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
     print(f"{prefix} Ingest:     {args.ingest_url}/ingest/position  vehicle_id={args.driver}  trip_id={published_trip_id}")
     print()
 
-    ingest_url = f"{args.ingest_url.rstrip('/')}/ingest/position"
+    position_url = f"{args.ingest_url.rstrip('/')}/ingest/position"
+    trip_update_url = f"{args.ingest_url.rstrip('/')}/ingest/trip-update"
     headers = {"Authorization": f"Bearer {args.token}"}
     client = httpx.Client(headers=headers, timeout=10.0)
 
@@ -476,9 +477,27 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
                 "route_id": route_id,
             }
 
+            # The sim already knows the current stop and its delay, so it emits
+            # the trip-update directly — no server-side recompute (that path,
+            # trip-updogger, is retired).
+            current_stop = stop_times[stop_idx]
+            trip_update_body = {
+                "trip_id": published_trip_id,
+                "vehicle_id": args.driver,
+                "timestamp": tst,
+                "stop_time_updates": [
+                    {
+                        "stop_id": current_stop["stop_id"],
+                        "stop_sequence": int(current_stop["stop_sequence"]),
+                        "arrival_delay": int(delay_seconds),
+                        "departure_delay": int(delay_seconds),
+                    }
+                ],
+            }
+
             try:
-                resp = client.post(ingest_url, json=body)
-                resp.raise_for_status()
+                client.post(position_url, json=body).raise_for_status()
+                client.post(trip_update_url, json=trip_update_body).raise_for_status()
                 status = "✓"
             except httpx.HTTPError as exc:
                 status = f"ERR({exc})"
