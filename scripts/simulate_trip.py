@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 # /// script
-# dependencies = ["paho-mqtt>=2.0"]
+# dependencies = ["httpx>=0.27"]
 # ///
-"""Simulate a real GTFS trip along its shape, publishing to MQTT in OwnTracks format.
+"""Simulate a real GTFS trip along its shape, POSTing to cafe-car's ingest API.
 
 The simulation starts at the position the bus would actually be at right now
 according to the GTFS schedule, with a random (or fixed) delay of 5–10 minutes.
 Today's date is used so the trip runs in wall-clock sync when --speed 1 is used.
 
-The MQTT topic follows the OwnTracks convention: owntracks/{driver}/{trip_id},
-e.g. owntracks/bob/WCCWB. Bus drivers set their OwnTracks device ID to their
-trip ID.
+Positions are POSTed to cafe-car's `/ingest/position` (the direct HTTP ingest
+seam), authenticated with a shared bearer token. Each trip reports under
+vehicle_id=driver, trip_id=<trip>, so cafe-car's `vehicle:{driver}:*` scan picks
+it up.
 
 Usage:
     # List available routes in the GTFS zip:
@@ -34,8 +35,9 @@ Usage:
     # Simulate every trip (load test):
     uv run scripts/simulate_trip.py --all-trips --speed 50 --quiet
 
-    # Custom driver credentials, speed and interval:
-    uv run scripts/simulate_trip.py --driver bob --password bob \\
+    # Custom driver, ingest endpoint, speed and interval:
+    uv run scripts/simulate_trip.py --driver bob \\
+        --ingest-url http://localhost:8000 --token dev-ingest-token \\
         --trip ELLSWB --speed 30 --interval 1
 
     # Custom delay range (seconds):
@@ -46,7 +48,6 @@ import argparse
 import csv
 import datetime
 import io
-import json
 import math
 import random
 import threading
@@ -54,7 +55,7 @@ import time
 import zipfile
 import zoneinfo
 
-import paho.mqtt.client as mqtt
+import httpx
 
 # ---------------------------------------------------------------------------
 # GTFS loading
@@ -241,14 +242,17 @@ def main() -> int:
         action="store_true",
         help="Simulate every trip in the GTFS zip",
     )
-    parser.add_argument("--driver", default="bob", help="Driver username / OwnTracks user (default: bob)")
-    parser.add_argument("--password", default="bob", help="MQTT password (default: bob)")
-    parser.add_argument("--broker", default="localhost", help="MQTT broker host (default: localhost)")
-    parser.add_argument("--port", type=int, help="MQTT broker port (default: 8883 with --tls, 1883 otherwise)")
-    parser.add_argument("--tls", action="store_true", help="Enable TLS/SSL")
-    parser.add_argument("--tls-ca", metavar="FILE", help="CA certificate file (optional, uses system CAs by default)")
-    parser.add_argument("--tls-cert", metavar="FILE", help="Client certificate file for mutual TLS")
-    parser.add_argument("--tls-key", metavar="FILE", help="Client private key file for mutual TLS")
+    parser.add_argument("--driver", default="bob", help="Driver username / vehicle_id (default: bob)")
+    parser.add_argument(
+        "--ingest-url",
+        default="http://localhost:8000",
+        help="cafe-car base URL for the ingest API (default: http://localhost:8000)",
+    )
+    parser.add_argument(
+        "--token",
+        default="dev-ingest-token",
+        help="Ingest API bearer token (default: dev-ingest-token)",
+    )
     parser.add_argument(
         "--speed",
         type=float,
@@ -303,9 +307,6 @@ def main() -> int:
         help="Publish under this trip ID instead of the GTFS trip ID (geometry still comes from --trip)",
     )
     args = parser.parse_args()
-
-    if args.port is None:
-        args.port = 8883 if args.tls else 1883
 
     gtfs = load_gtfs(args.gtfs)
 
@@ -422,29 +423,15 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
     print(f"{prefix} Duration:   {trip_duration // 60:.0f} min  ({trip_duration}s scheduled)")
     print(f"{prefix} Delay:      {args.min_delay:.0f}–{args.max_delay:.0f}s (random walk, drift ±{args.delay_drift:.0f}s/tick, starting {delay_seconds:.0f}s)")
     print(f"{prefix} Speed:      {args.speed}x  →  real runtime ≈ {trip_duration / args.speed / 60:.1f} min")
-    print(f"{prefix} MQTT:       {args.broker}:{args.port}  topic=owntracks/{args.driver}/{published_trip_id}  tls={'yes' if args.tls else 'no'}")
+    print(f"{prefix} Ingest:     {args.ingest_url}/ingest/position  vehicle_id={args.driver}  trip_id={published_trip_id}")
     print()
 
-    # Connect MQTT
-    client = mqtt.Client(
-        mqtt.CallbackAPIVersion.VERSION2,
-        client_id=f"gtfs-sim-{trip_id}",
-    )
-    client.username_pw_set(args.driver, args.password)
+    ingest_url = f"{args.ingest_url.rstrip('/')}/ingest/position"
+    headers = {"Authorization": f"Bearer {args.token}"}
+    client = httpx.Client(headers=headers, timeout=10.0)
 
-    if args.tls:
-        client.tls_set(
-            ca_certs=args.tls_ca,
-            certfile=args.tls_cert,
-            keyfile=args.tls_key,
-        )
+    print(f"{prefix} Starting simulation (Ctrl-C to stop).\n")
 
-    print(f"{prefix} Connecting to {args.broker}:{args.port}…")
-    client.connect(args.broker, args.port, keepalive=60)
-    client.loop_start()
-    print(f"{prefix} Connected. Starting simulation (Ctrl-C to stop).\n")
-
-    topic = f"owntracks/{args.driver}/{published_trip_id}"
     real_start = time.time()
     tz = zoneinfo.ZoneInfo(gtfs["agency_timezone"])
     today_midnight = int(datetime.datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
@@ -478,20 +465,23 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
             else:
                 tst = today_midnight + int(stop_schedule[0][0] + schedule_elapsed + delay_seconds)
 
-            payload = {
-                "_type": "location",
+            body = {
+                "vehicle_id": args.driver,
+                "trip_id": published_trip_id,
                 "lat": round(lat, 6),
                 "lon": round(lon, 6),
-                "tst": tst,
-                "vel": round(speed_kmh, 1),
-                "cog": round(hdg, 1),
-                "acc": 5,
-                "tid": args.driver[:2].upper(),
-                "t": "t",
+                "bearing": round(hdg, 1),
+                "speed": round(speed_ms, 4),
+                "timestamp": tst,
+                "route_id": route_id,
             }
 
-            result = client.publish(topic, json.dumps(payload), qos=1)
-            status = "✓" if result.rc == mqtt.MQTT_ERR_SUCCESS else f"ERR({result.rc})"
+            try:
+                resp = client.post(ingest_url, json=body)
+                resp.raise_for_status()
+                status = "✓"
+            except httpx.HTTPError as exc:
+                status = f"ERR({exc})"
 
             print(
                 f"{prefix} [{time.strftime('%H:%M:%S')}] {pct:5.1f}%  "
@@ -506,8 +496,7 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        client.loop_stop()
-        client.disconnect()
+        client.close()
 
 
 if __name__ == "__main__":

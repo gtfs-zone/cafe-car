@@ -9,6 +9,7 @@ from sqlalchemy import text
 from cafe_car.database import get_engine, get_session_factory
 from cafe_car.passwd_file import regenerate_passwd_file
 from cafe_car.routers.gtfs_rt import router as gtfs_rt_router
+from cafe_car.routers.ingest import router as ingest_router
 from cafe_car.routers.internal import router as internal_router
 from cafe_car.settings import get_settings
 
@@ -46,6 +47,7 @@ def create_public_app() -> FastAPI:
         )
 
     app.include_router(gtfs_rt_router)
+    app.include_router(ingest_router, include_in_schema=include_in_schema)
     app.include_router(internal_router, include_in_schema=include_in_schema)
 
     @app.get("/health")

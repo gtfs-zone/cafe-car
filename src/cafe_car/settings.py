@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://redis:6379/3"
     cors_allowed_origins: list[str] = []
 
+    # Shared bearer token guarding the service-to-service ingest API
+    # (/ingest/*). Producers (hell-gate-bridge, simulate_trip.py) send it as
+    # `Authorization: Bearer <token>`. Separate secret from the Traccar token.
+    ingest_api_token: str | None = None
+
     # Traccar integration (device provisioning).
     traccar_url: str = "http://traccar:8082"
     # Auth: prefer a bearer API token; fall back to Basic auth (email/password).
