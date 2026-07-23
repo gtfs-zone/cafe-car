@@ -3,12 +3,15 @@ from pathlib import Path
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from railroad_club.models.driver import Driver
 from railroad_club.models.feed import Feed
 from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
 from railroad_club.models.user import User
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from cafe_car.traccar import build_config_url, qr_svg
 
 router = APIRouter()
 
@@ -139,6 +142,42 @@ async def add_entity(
     await session.commit()
     entities = await _load_entities(session, alert_id)
     return _render_partial(request, alert_id, entities)
+
+
+async def _load_owned_driver(
+    session: AsyncSession, subject: str, driver_id: int
+) -> Driver | None:
+    result = await session.execute(
+        select(Driver)
+        .join(Feed, Driver.feed_id == Feed.id)
+        .join(User, Feed.owner_id == User.id)
+        .where(User.provider_subject == subject)
+        .where(Driver.id == driver_id)
+    )
+    return result.scalar_one_or_none()
+
+
+@router.get(
+    "/driver/{driver_id}/provisioning-partial", response_class=HTMLResponse
+)
+async def driver_provisioning_partial(
+    request: Request, driver_id: int
+) -> HTMLResponse:
+    subject = request.session.get("subject", "")
+    session: AsyncSession = request.state.session
+    driver = await _load_owned_driver(session, subject, driver_id)
+    if driver is None:
+        return HTMLResponse("<p>Not found or access denied.</p>", status_code=403)
+    config_url = build_config_url(driver.username)
+    return templates.TemplateResponse(
+        request,
+        "sqladmin/_driver_provisioning.html",
+        {
+            "username": driver.username,
+            "config_url": config_url,
+            "qr_svg": qr_svg(config_url),
+        },
+    )
 
 
 @router.post("/feeds/{feed_id}/reload")

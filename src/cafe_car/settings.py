@@ -14,6 +14,21 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://redis:6379/3"
     cors_allowed_origins: list[str] = []
 
+    # Traccar integration (device provisioning).
+    traccar_url: str = "http://traccar:8082"
+    # Auth: prefer a bearer API token; fall back to Basic auth (email/password).
+    traccar_api_token: str | None = None
+    traccar_email: str | None = None
+    traccar_password: str | None = None
+    # Phone-reachable base the Traccar Client connects to (osmand :5055). Must be
+    # reachable from the driver's phone, not just the host — parameterize per env.
+    traccar_client_base: str = "http://localhost:5055"
+    # Single global tracking profile baked into every provisioning QR/URL.
+    traccar_default_profile: str = (
+        "accuracy=highest&distance=1&interval=30"
+        "&heartbeat=3000&wakelock=true&stop_detection=true"
+    )
+
     model_config = SettingsConfigDict(env_file=".env")
 
 

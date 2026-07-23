@@ -12,6 +12,8 @@ dependencies = [
     "pydantic-settings",
     "gtfs-realtime-bindings>=2.0.0",
     "celery[redis]",
+    "httpx",
+    "segno",
     "railroad-club",
 ]
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, ClassVar
 
@@ -221,10 +222,15 @@ class DriverAdmin(ModelView, model=Driver):
             ]
         },
     }
-    column_list: ClassVar[list] = [Driver.username, "feed"]
+    details_template = "sqladmin/driver_detail.html"
+    column_list: ClassVar[list] = [Driver.username, "feed", "provisioning"]
+    column_labels: ClassVar[dict] = {"provisioning": "Provisioning"}
     column_formatters: ClassVar[dict] = {
         Driver.username: (
             lambda m, a: Markup(f'<a href="/driver/edit/{m.id}">{m.username}</a>')
+        ),
+        "provisioning": lambda m, a: Markup(
+            f'<a href="/driver/details/{m.id}">QR / config URL</a>'
         ),
     }
     column_searchable_list: ClassVar[list] = [Driver.username]
@@ -319,6 +325,21 @@ class DriverAdmin(ModelView, model=Driver):
     ) -> None:
         with contextlib.suppress(Exception):
             await regenerate_passwd_file()
+        if is_created:
+            # Auto-create the matching Traccar device (uniqueId = username).
+            # Best-effort: never block driver creation on Traccar availability.
+            try:
+                from cafe_car.traccar import get_traccar_client
+
+                await get_traccar_client().ensure_device(
+                    name=model.username, unique_id=model.username
+                )
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "Failed to auto-create Traccar device for driver %s",
+                    model.username,
+                    exc_info=True,
+                )
 
     async def after_model_delete(self, model: Driver, request: Request) -> None:
         with contextlib.suppress(Exception):
