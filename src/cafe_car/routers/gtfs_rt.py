@@ -80,14 +80,50 @@ async def trip_updates(
             )
             entity.trip_update.vehicle.id = trip_data["vehicle_id"]
             entity.trip_update.timestamp = trip_data["timestamp"]
-            stu = entity.trip_update.stop_time_update.add()
-            stu.stop_sequence = trip_data["stop_sequence"]
-            stu.arrival.delay = trip_data["delay"]
-            stu.schedule_relationship = (
-                gtfs_realtime_pb2.TripUpdate.StopTimeUpdate.SCHEDULED
-            )
+            for update in _stop_time_updates(trip_data):
+                stu = entity.trip_update.stop_time_update.add()
+                _fill_stop_time_update(stu, update)
 
     return Response(content=msg.SerializeToString(), media_type=PROTOBUF_CONTENT_TYPE)
+
+
+_SR_ENUM = gtfs_realtime_pb2.TripUpdate.StopTimeUpdate
+
+
+def _stop_time_updates(trip_data: dict) -> list[dict]:
+    """Return the per-stop update list, tolerating the legacy single-delay shape."""
+    updates = trip_data.get("stop_time_updates")
+    if updates:
+        return updates
+    # Backward-compat: the old trip-updogger record carried one flat delay.
+    if "delay" in trip_data:
+        return [
+            {
+                "stop_sequence": trip_data.get("stop_sequence"),
+                "arrival_delay": trip_data["delay"],
+            }
+        ]
+    return []
+
+
+def _fill_stop_time_update(stu: object, update: dict) -> None:
+    if update.get("stop_id") is not None:
+        stu.stop_id = update["stop_id"]
+    if update.get("stop_sequence") is not None:
+        stu.stop_sequence = update["stop_sequence"]
+    # Absolute time wins over delay when both are supplied.
+    if update.get("arrival_time") is not None:
+        stu.arrival.time = update["arrival_time"]
+    elif update.get("arrival_delay") is not None:
+        stu.arrival.delay = update["arrival_delay"]
+    if update.get("departure_time") is not None:
+        stu.departure.time = update["departure_time"]
+    elif update.get("departure_delay") is not None:
+        stu.departure.delay = update["departure_delay"]
+    sr = update.get("schedule_relationship")
+    stu.schedule_relationship = (
+        _SR_ENUM.Value(sr) if sr else _SR_ENUM.SCHEDULED
+    )
 
 
 @router.get("/{feed_name}/vehicle_positions.pb")

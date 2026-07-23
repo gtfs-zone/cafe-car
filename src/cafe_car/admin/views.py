@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
 from cafe_car.admin.context import current_subject_var
-from cafe_car.passwd_file import regenerate_passwd_file
 
 _STATUS_BADGE = {
     "pending": '<span style="color:#f59e0b;font-weight:bold">pending</span>',
@@ -323,8 +322,6 @@ class DriverAdmin(ModelView, model=Driver):
     async def after_model_change(
         self, data: dict, model: Driver, is_created: bool, request: Request
     ) -> None:
-        with contextlib.suppress(Exception):
-            await regenerate_passwd_file()
         if is_created:
             # Auto-create the matching Traccar device (uniqueId = username).
             # Best-effort: never block driver creation on Traccar availability.
@@ -341,9 +338,6 @@ class DriverAdmin(ModelView, model=Driver):
                     exc_info=True,
                 )
 
-    async def after_model_delete(self, model: Driver, request: Request) -> None:
-        with contextlib.suppress(Exception):
-            await regenerate_passwd_file()
 
 
 _OPTIONAL_ALERT_FIELDS = ("cause", "effect", "severity_level", "url")

@@ -21,6 +21,10 @@ router = APIRouter()
 
 # Must match the vehicle-poser shim's TTL — cafe-car serves whatever is live.
 POSITION_TTL = 60
+# Trip-update predictions live longer than a single fix — a prediction is valid
+# even if the next position hasn't landed yet. Still bounded so stale trips age
+# out once a producer stops publishing.
+TRIP_UPDATE_TTL = 300
 
 
 class PositionIngest(BaseModel):
@@ -32,6 +36,26 @@ class PositionIngest(BaseModel):
     speed: float | None = None  # metres/second (the vehicle:* contract)
     timestamp: int  # epoch seconds
     route_id: str | None = None
+
+
+class StopTimeUpdateIngest(BaseModel):
+    # Identify the stop by id or sequence (at least one; GTFS-RT accepts either).
+    stop_id: str | None = None
+    stop_sequence: int | None = None
+    # Absolute epoch time or a delay in seconds, per event. Absolute wins when
+    # both are present (see gtfs_rt.py::trip_updates).
+    arrival_time: int | None = None
+    arrival_delay: int | None = None
+    departure_time: int | None = None
+    departure_delay: int | None = None
+    schedule_relationship: str | None = None  # default SCHEDULED
+
+
+class TripUpdateIngest(BaseModel):
+    trip_id: str
+    vehicle_id: str
+    timestamp: int  # epoch seconds
+    stop_time_updates: list[StopTimeUpdateIngest]
 
 
 def _check_auth(authorization: str | None) -> None:
@@ -72,4 +96,28 @@ async def ingest_position(
     # matching cafe-car's `vehicle:{username}:*` scan.
     key = f"vehicle:{body.vehicle_id}:{body.trip_id}"
     await request.app.state.redis.setex(key, POSITION_TTL, json.dumps(record))
+    return {"status": "ok"}
+
+
+@router.post("/ingest/trip-update")
+async def ingest_trip_update(
+    body: TripUpdateIngest,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, str]:
+    _check_auth(authorization)
+
+    # Rich, multi-stop record read by gtfs_rt.py::trip_updates. Supersedes the
+    # old single-`delay` shape trip-updogger wrote — producers (Amtrak via
+    # hell-gate, simulate_trip.py) now supply per-stop predictions directly.
+    record = {
+        "trip_id": body.trip_id,
+        "vehicle_id": body.vehicle_id,
+        "timestamp": body.timestamp,
+        "stop_time_updates": [
+            stu.model_dump(exclude_none=True) for stu in body.stop_time_updates
+        ],
+    }
+    key = f"trip_update:{body.trip_id}"
+    await request.app.state.redis.setex(key, TRIP_UPDATE_TTL, json.dumps(record))
     return {"status": "ok"}
