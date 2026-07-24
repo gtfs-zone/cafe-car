@@ -46,10 +46,10 @@ async def trip_updates(
     msg.header.incrementality = gtfs_realtime_pb2.FeedHeader.FULL_DATASET
     msg.header.timestamp = int(time.time())
 
-    from railroad_club.models.driver import Driver
+    from railroad_club.models.tracker import Tracker
 
-    result = await session.exec(select(Driver).where(Driver.feed_id == feed.id))
-    drivers = result.all()
+    result = await session.exec(select(Tracker).where(Tracker.feed_id == feed.id))
+    trackers = result.all()
 
     redis = request.app.state.redis
 
@@ -57,8 +57,8 @@ async def trip_updates(
     # distinguished by start_date — so dedup on the pair, not trip_id alone.
     seen: set[tuple[str, str | None]] = set()
     entity_id = 0
-    for driver in drivers:
-        async for key in redis.scan_iter(f"vehicle:{driver.username}:*"):
+    for tracker in trackers:
+        async for key in redis.scan_iter(f"vehicle:{tracker.id}:*"):
             vehicle_raw = await redis.get(key)
             if vehicle_raw is None:
                 continue
@@ -88,7 +88,8 @@ async def trip_updates(
             )
             if start_date:
                 entity.trip_update.trip.start_date = start_date
-            entity.trip_update.vehicle.id = trip_data["vehicle_id"]
+            # Public label only — never the secret tracker id.
+            entity.trip_update.vehicle.id = tracker.nickname
             entity.trip_update.timestamp = trip_data["timestamp"]
             for update in _stop_time_updates(trip_data):
                 stu = entity.trip_update.stop_time_update.add()
@@ -149,17 +150,17 @@ async def vehicle_positions(
     msg.header.incrementality = gtfs_realtime_pb2.FeedHeader.FULL_DATASET
     msg.header.timestamp = int(time.time())
 
-    from railroad_club.models.driver import Driver
+    from railroad_club.models.tracker import Tracker
 
-    result = await session.exec(select(Driver).where(Driver.feed_id == feed.id))
-    drivers = result.all()
+    result = await session.exec(select(Tracker).where(Tracker.feed_id == feed.id))
+    trackers = result.all()
 
     redis = request.app.state.redis
     alias_map = await _alias_map(feed.id, session)
 
     entity_id = 0
-    for driver in drivers:
-        async for key in redis.scan_iter(f"vehicle:{driver.username}:*"):
+    for tracker in trackers:
+        async for key in redis.scan_iter(f"vehicle:{tracker.id}:*"):
             raw = await redis.get(key)
             if raw is None:
                 continue
@@ -168,8 +169,9 @@ async def vehicle_positions(
             entity_id += 1
             entity = msg.entity.add()
             entity.id = str(entity_id)
-            entity.vehicle.vehicle.id = data["driver"]
-            entity.vehicle.vehicle.label = data["driver"]
+            # Public label only (the tracker id is the secret credential).
+            entity.vehicle.vehicle.id = tracker.nickname
+            entity.vehicle.vehicle.label = tracker.nickname
             entity.vehicle.position.latitude = data["lat"]
             entity.vehicle.position.longitude = data["lon"]
             if data["bearing"] is not None:
@@ -179,7 +181,7 @@ async def vehicle_positions(
             trip_id = data.get("trip_id")
             if trip_id is not None:
                 # Only emit a TripDescriptor when the vehicle is tied to a trip.
-                # A driver with no active rule resolves trip_id to None; that is
+                # A tracker with no active rule resolves trip_id to None; that is
                 # a valid position (GTFS-RT trip is optional) and must not crash
                 # the whole feed by assigning None to a protobuf string field.
                 entity.vehicle.trip.trip_id = alias_map.get(trip_id, trip_id)

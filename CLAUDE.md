@@ -4,9 +4,9 @@
 
 FastAPI service that:
 - Sits behind oauth2-proxy forward auth (Traefik middleware) using Dex as the OIDC provider (GitHub OAuth)
-- Manages config data (Feeds, Drivers) in PostgreSQL via SQLModel + Alembic
+- Manages config data (Feeds, Trackers) in PostgreSQL via SQLModel + Alembic
 - Exposes GTFS-RT protobuf endpoints (`/<feed_name>/*.pb`) for trip updates, vehicle positions, and service alerts
-- Provides a scoped SQLAdmin interface at `/admin` where every authenticated user can only see their own Feeds and associated Drivers
+- Provides a scoped SQLAdmin interface at `/admin` where every authenticated user can only see their own Feeds and associated Trackers
 
 ## Commands
 
@@ -48,7 +48,7 @@ No passwords are stored for web users — Dex/GitHub owns credentials. The `User
 
 The public GTFS-RT endpoints (`rt.gtfs.zone`) have **no authentication middleware** — they are publicly accessible.
 
-`Driver` records have their own `password` field (hashed) for GTFS-RT feed access.
+`Tracker` records have a secret pet-name `id` (e.g. `gently-tender-oyster`) that serves as the Traccar `uniqueId` / QR provisioning credential. There is **no password**. The `id` is a secret and is never exposed in a public GTFS-RT feed — feeds show the tracker's public `nickname` instead.
 
 ## Redis DB Allocation
 
@@ -61,14 +61,14 @@ The public GTFS-RT endpoints (`rt.gtfs.zone`) have **no authentication middlewar
 
 There are two separate FastAPI apps sharing the same DB/Redis:
 
-- `src/app/main.py` → **public API** (`app = create_public_app()`): GTFS-RT protobuf endpoints (`/{feed_name}/trip_updates.pb`, `vehicle_positions.pb`, `service_alerts.pb`) + MQTT auth (`POST /mqtt/auth`). Run with `uv run fastapi dev src/app/main.py`.
+- `src/app/main.py` → **public API** (`app = create_public_app()`): GTFS-RT protobuf endpoints (`/{feed_name}/trip_updates.pb`, `vehicle_positions.pb`, `service_alerts.pb`) + the HTTP ingest seam (`POST /ingest/position`, `POST /ingest/trip-update`). Run with `uv run fastapi dev src/app/main.py`.
 - `src/app/admin_main.py` → **admin app** (`app = create_admin_app()`): SQLAdmin interface mounted at `/`. Uses `OIDCAuthBackend`, `SessionMiddleware`, `DBSessionMiddleware`, and `SubjectMiddleware`. Run with `uv run fastapi dev src/app/admin_main.py`.
 
-The current user identity flows via `request.session["subject"]` (set in `OIDCAuthBackend.authenticate`) and also via `current_subject_var` (`ContextVar`) for use in `DriverAdmin.scaffold_form` where `request` is unavailable.
+The current user identity flows via `request.session["subject"]` (set in `OIDCAuthBackend.authenticate`) and also via `current_subject_var` (`ContextVar`) for use in `TrackerAdmin.scaffold_form` where `request` is unavailable.
 
 ## Redis Data Format
 
-Vehicle positions are stored at key `vehicle:{driver.username}` as JSON with fields: `driver`, `lat`, `lon`, `bearing`, `speed`, `trip_id`, `route_id` (optional), `timestamp`.
+Vehicle positions are stored at key `vehicle:{tracker.id}` as JSON with fields: `tracker_id`, `lat`, `lon`, `bearing`, `speed`, `trip_id`, `route_id` (optional), `timestamp`. The `tracker_id` is the secret credential and is only a Redis-internal identifier — feeds label vehicles by the tracker's public `nickname`, resolved from the DB.
 
 ## Alembic Workflow
 
@@ -119,7 +119,7 @@ curl -H "X-Auth-Request-User: alice" -H "X-Auth-Request-Email: alice@example.com
 - Never include `Co-Authored-By: Claude ...` trailers in commit messages.
 - Only read files within this repo's directory. Do not access parent directories or sibling repos.
 - Never create a stop_time with null departure and arrival
-- Admin views must always scope queries to the authenticated user — never expose another user's Feeds or Drivers
+- Admin views must always scope queries to the authenticated user — never expose another user's Feeds or Trackers
 - Use `uv` for all package management (never `pip install` directly)
 - Run `uv run ruff check src/` before committing
 

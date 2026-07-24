@@ -6,11 +6,11 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, ClassVar
 
 from markupsafe import Markup
-from railroad_club.models.driver import Driver
-from railroad_club.models.driver_rule import DriverRule
 from railroad_club.models.feed import Feed
 from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
+from railroad_club.models.tracker import Tracker
+from railroad_club.models.tracker_rule import TrackerRule
 from railroad_club.models.trip_alias import TripAlias
 from railroad_club.models.user import User
 from sqladmin import ModelView
@@ -133,7 +133,7 @@ class FeedAdmin(ModelView, model=Feed):
     }
     column_searchable_list: ClassVar[list] = [Feed.feed_name]
     form_excluded_columns: ClassVar[list] = [
-        "owner", "drivers", "alerts", "owner_id", "gtfs_static_feed", "aliases"
+        "owner", "trackers", "alerts", "owner_id", "gtfs_static_feed", "aliases"
     ]
     name = "Feed"
     name_plural = "Feeds"
@@ -206,36 +206,26 @@ class FeedAdmin(ModelView, model=Feed):
             celery_app.send_task("worker.tasks.load_feed", args=[model.id])
 
 
-class DriverAdmin(ModelView, model=Driver):
-    form_args: ClassVar[dict] = {
-        "username": {
-            "validators": [
-                Length(min=3, max=32, message="username must be 3-32 characters"),
-                Regexp(r"^[a-zA-Z0-9]+$", message="username must be alphanumeric only"),
-            ]
-        },
-        "password": {
-            "validators": [
-                Length(min=3, max=32, message="password must be 3-32 characters"),
-                Regexp(r"^[a-zA-Z0-9]+$", message="password must be alphanumeric only"),
-            ]
-        },
+class TrackerAdmin(ModelView, model=Tracker):
+    details_template = "sqladmin/tracker_detail.html"
+    column_list: ClassVar[list] = [Tracker.nickname, Tracker.id, "feed", "provisioning"]
+    column_labels: ClassVar[dict] = {
+        "provisioning": "Provisioning",
+        Tracker.id: "Tracker ID (secret)",
     }
-    details_template = "sqladmin/driver_detail.html"
-    column_list: ClassVar[list] = [Driver.username, "feed", "provisioning"]
-    column_labels: ClassVar[dict] = {"provisioning": "Provisioning"}
     column_formatters: ClassVar[dict] = {
-        Driver.username: (
-            lambda m, a: Markup(f'<a href="/driver/edit/{m.id}">{m.username}</a>')
+        Tracker.nickname: (
+            lambda m, a: Markup(f'<a href="/tracker/edit/{m.id}">{m.nickname}</a>')
         ),
         "provisioning": lambda m, a: Markup(
-            f'<a href="/driver/details/{m.id}">QR / config URL</a>'
+            f'<a href="/tracker/details/{m.id}">QR / config URL</a>'
         ),
     }
-    column_searchable_list: ClassVar[list] = [Driver.username]
-    form_excluded_columns: ClassVar[list] = ["feed"]
-    name = "Driver"
-    name_plural = "Drivers"
+    column_searchable_list: ClassVar[list] = [Tracker.nickname]
+    # ``id`` is auto-generated (a secret pet-name); never edited by hand.
+    form_excluded_columns: ClassVar[list] = ["feed", "id", "rules"]
+    name = "Tracker"
+    name_plural = "Trackers"
 
     async def scaffold_form(self, rules: list | None = None) -> type:
         Form = await super().scaffold_form(rules)
@@ -254,35 +244,35 @@ class DriverAdmin(ModelView, model=Driver):
         )
         return Form
 
-    def _base_query(self, subject: str) -> Select[tuple[Driver]]:
+    def _base_query(self, subject: str) -> Select[tuple[Tracker]]:
         return (
-            select(Driver)
-            .join(Feed, Driver.feed_id == Feed.id)
+            select(Tracker)
+            .join(Feed, Tracker.feed_id == Feed.id)
             .join(User, Feed.owner_id == User.id)
             .where(User.provider_subject == subject)
         )
 
-    def list_query(self, request: Request) -> Select[tuple[Driver]]:
+    def list_query(self, request: Request) -> Select[tuple[Tracker]]:
         return self._base_query(_current_subject(request))
 
     def count_query(self, request: Request) -> Select[tuple[int]]:
         subject = _current_subject(request)
         return (
-            select(func.count(Driver.id))
-            .join(Feed, Driver.feed_id == Feed.id)
+            select(func.count(Tracker.id))
+            .join(Feed, Tracker.feed_id == Feed.id)
             .join(User, Feed.owner_id == User.id)
             .where(User.provider_subject == subject)
         )
 
-    def details_query(self, request: Request) -> Select[tuple[Driver]]:
+    def details_query(self, request: Request) -> Select[tuple[Tracker]]:
         pk = request.path_params["pk"]
-        return self._base_query(_current_subject(request)).where(Driver.id == int(pk))
+        return self._base_query(_current_subject(request)).where(Tracker.id == pk)
 
-    def form_edit_query(self, request: Request) -> Select[tuple[Driver]]:
+    def form_edit_query(self, request: Request) -> Select[tuple[Tracker]]:
         pk = request.path_params["pk"]
-        return self._base_query(_current_subject(request)).where(Driver.id == int(pk))
+        return self._base_query(_current_subject(request)).where(Tracker.id == pk)
 
-    async def insert_model(self, request: Request, data: dict) -> Driver:
+    async def insert_model(self, request: Request, data: dict) -> Tracker:
         subject = _current_subject(request)
         session: AsyncSession = request.state.session
         feed_id = data.get("feed_id")
@@ -298,43 +288,43 @@ class DriverAdmin(ModelView, model=Driver):
             raise PermissionError("Feed not found or access denied")
         return await super().insert_model(request, data)
 
-    async def _get_owned_driver(self, request: Request, pk: str | int) -> Driver:
+    async def _get_owned_tracker(self, request: Request, pk: str | int) -> Tracker:
         subject = _current_subject(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
-            self._base_query(subject).where(Driver.id == int(pk))
+            self._base_query(subject).where(Tracker.id == pk)
         )
-        driver = result.scalar_one_or_none()
-        if driver is None:
-            raise PermissionError("Driver not found or access denied")
-        return driver
+        tracker = result.scalar_one_or_none()
+        if tracker is None:
+            raise PermissionError("Tracker not found or access denied")
+        return tracker
 
     async def update_model(
         self, request: Request, pk: str | int, data: dict
-    ) -> Driver:
-        await self._get_owned_driver(request, pk)
+    ) -> Tracker:
+        await self._get_owned_tracker(request, pk)
         return await super().update_model(request, pk, data)
 
     async def delete_model(self, request: Request, pk: str | int) -> None:
-        await self._get_owned_driver(request, pk)
+        await self._get_owned_tracker(request, pk)
         await super().delete_model(request, pk)
 
     async def after_model_change(
-        self, data: dict, model: Driver, is_created: bool, request: Request
+        self, data: dict, model: Tracker, is_created: bool, request: Request
     ) -> None:
         if is_created:
-            # Auto-create the matching Traccar device (uniqueId = username).
-            # Best-effort: never block driver creation on Traccar availability.
+            # Auto-create the matching Traccar device (uniqueId = tracker id).
+            # Best-effort: never block tracker creation on Traccar availability.
             try:
                 from cafe_car.traccar import get_traccar_client
 
                 await get_traccar_client().ensure_device(
-                    name=model.username, unique_id=model.username
+                    name=model.nickname, unique_id=model.id
                 )
             except Exception:
                 logging.getLogger(__name__).warning(
-                    "Failed to auto-create Traccar device for driver %s",
-                    model.username,
+                    "Failed to auto-create Traccar device for tracker %s",
+                    model.id,
                     exc_info=True,
                 )
 
@@ -739,111 +729,111 @@ class TripAliasAdmin(ModelView, model=TripAlias):
         await super().delete_model(request, pk)
 
 
-class DriverRuleAdmin(ModelView, model=DriverRule):
+class TrackerRuleAdmin(ModelView, model=TrackerRule):
     column_list: ClassVar[list] = [
-        "driver",
-        DriverRule.trip_id,
-        DriverRule.monday,
-        DriverRule.tuesday,
-        DriverRule.wednesday,
-        DriverRule.thursday,
-        DriverRule.friday,
-        DriverRule.saturday,
-        DriverRule.sunday,
-        DriverRule.start_time,
-        DriverRule.end_time,
+        "tracker",
+        TrackerRule.trip_id,
+        TrackerRule.monday,
+        TrackerRule.tuesday,
+        TrackerRule.wednesday,
+        TrackerRule.thursday,
+        TrackerRule.friday,
+        TrackerRule.saturday,
+        TrackerRule.sunday,
+        TrackerRule.start_time,
+        TrackerRule.end_time,
     ]
-    column_searchable_list: ClassVar[list] = [DriverRule.trip_id]
-    form_excluded_columns: ClassVar[list] = ["driver"]
-    name = "Driver Rule"
-    name_plural = "Driver Rules"
+    column_searchable_list: ClassVar[list] = [TrackerRule.trip_id]
+    form_excluded_columns: ClassVar[list] = ["tracker"]
+    name = "Tracker Rule"
+    name_plural = "Tracker Rules"
 
     async def scaffold_form(self, rules: list | None = None) -> type:
         Form = await super().scaffold_form(rules)
         subject = current_subject_var.get()
         async with self.session_maker() as session:
             result = await session.execute(
-                select(Driver)
-                .join(Feed, Driver.feed_id == Feed.id)
+                select(Tracker)
+                .join(Feed, Tracker.feed_id == Feed.id)
                 .join(User, Feed.owner_id == User.id)
                 .where(User.provider_subject == subject)
-                .order_by(Driver.username)
+                .order_by(Tracker.nickname)
             )
-            drivers = result.scalars().all()
-        Form.driver_id = SelectField(
-            "Driver",
-            choices=[(d.id, d.username) for d in drivers],
-            coerce=int,
+            trackers = result.scalars().all()
+        Form.tracker_id = SelectField(
+            "Tracker",
+            choices=[(t.id, t.nickname) for t in trackers],
+            coerce=str,
         )
         return Form
 
-    def _base_query(self, subject: str) -> Select[tuple[DriverRule]]:
+    def _base_query(self, subject: str) -> Select[tuple[TrackerRule]]:
         return (
-            select(DriverRule)
-            .join(Driver, DriverRule.driver_id == Driver.id)
-            .join(Feed, Driver.feed_id == Feed.id)
+            select(TrackerRule)
+            .join(Tracker, TrackerRule.tracker_id == Tracker.id)
+            .join(Feed, Tracker.feed_id == Feed.id)
             .join(User, Feed.owner_id == User.id)
             .where(User.provider_subject == subject)
         )
 
-    def list_query(self, request: Request) -> Select[tuple[DriverRule]]:
+    def list_query(self, request: Request) -> Select[tuple[TrackerRule]]:
         return self._base_query(_current_subject(request))
 
     def count_query(self, request: Request) -> Select[tuple[int]]:
         subject = _current_subject(request)
         return (
-            select(func.count(DriverRule.id))
-            .join(Driver, DriverRule.driver_id == Driver.id)
-            .join(Feed, Driver.feed_id == Feed.id)
+            select(func.count(TrackerRule.id))
+            .join(Tracker, TrackerRule.tracker_id == Tracker.id)
+            .join(Feed, Tracker.feed_id == Feed.id)
             .join(User, Feed.owner_id == User.id)
             .where(User.provider_subject == subject)
         )
 
-    def details_query(self, request: Request) -> Select[tuple[DriverRule]]:
+    def details_query(self, request: Request) -> Select[tuple[TrackerRule]]:
         pk = request.path_params["pk"]
         return self._base_query(_current_subject(request)).where(
-            DriverRule.id == int(pk)
+            TrackerRule.id == int(pk)
         )
 
-    def form_edit_query(self, request: Request) -> Select[tuple[DriverRule]]:
+    def form_edit_query(self, request: Request) -> Select[tuple[TrackerRule]]:
         pk = request.path_params["pk"]
         return self._base_query(_current_subject(request)).where(
-            DriverRule.id == int(pk)
+            TrackerRule.id == int(pk)
         )
 
-    async def insert_model(self, request: Request, data: dict) -> DriverRule:
+    async def insert_model(self, request: Request, data: dict) -> TrackerRule:
         subject = _current_subject(request)
         session: AsyncSession = request.state.session
-        driver_id = data.get("driver_id")
-        if not driver_id:
-            raise ValueError("A driver must be selected")
+        tracker_id = data.get("tracker_id")
+        if not tracker_id:
+            raise ValueError("A tracker must be selected")
         result = await session.execute(
-            select(Driver)
-            .join(Feed, Driver.feed_id == Feed.id)
+            select(Tracker)
+            .join(Feed, Tracker.feed_id == Feed.id)
             .join(User, Feed.owner_id == User.id)
             .where(User.provider_subject == subject)
-            .where(Driver.id == driver_id)
+            .where(Tracker.id == tracker_id)
         )
         if result.scalar_one_or_none() is None:
-            raise PermissionError("Driver not found or access denied")
+            raise PermissionError("Tracker not found or access denied")
         return await super().insert_model(request, data)
 
     async def _get_owned_rule(
         self, request: Request, pk: str | int
-    ) -> DriverRule:
+    ) -> TrackerRule:
         subject = _current_subject(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
-            self._base_query(subject).where(DriverRule.id == int(pk))
+            self._base_query(subject).where(TrackerRule.id == int(pk))
         )
         rule = result.scalar_one_or_none()
         if rule is None:
-            raise PermissionError("Driver rule not found or access denied")
+            raise PermissionError("Tracker rule not found or access denied")
         return rule
 
     async def update_model(
         self, request: Request, pk: str | int, data: dict
-    ) -> DriverRule:
+    ) -> TrackerRule:
         await self._get_owned_rule(request, pk)
         return await super().update_model(request, pk, data)
 

@@ -65,7 +65,7 @@ class TripUpdateIngest(BaseModel):
 
 def _vehicle_key(vehicle_id: str, trip_id: str, start_date: str | None) -> str:
     # Appending start_date (when present) gives concurrent instances of one
-    # long-running daily trip distinct keys. The `vehicle:{username}:*` scan in
+    # long-running daily trip distinct keys. The `vehicle:{tracker_id}:*` scan in
     # gtfs_rt.py still matches.
     slug = f"{trip_id}:{start_date}" if start_date else trip_id
     return f"vehicle:{vehicle_id}:{slug}"
@@ -96,10 +96,10 @@ async def ingest_position(
     _check_auth(authorization)
 
     # Byte-for-byte the record the vehicle-poser shim writes; keys read by
-    # gtfs_rt.py::vehicle_positions (driver, trip_id, lat, lon, bearing, speed,
-    # timestamp, optional route_id).
+    # gtfs_rt.py::vehicle_positions (tracker_id, trip_id, lat, lon, bearing,
+    # speed, timestamp, optional route_id). vehicle_id is the tracker id.
     record: dict[str, object] = {
-        "driver": body.vehicle_id,
+        "tracker_id": body.vehicle_id,
         "trip_id": body.trip_id,
         "lat": body.lat,
         "lon": body.lon,

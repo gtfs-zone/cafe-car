@@ -788,6 +788,15 @@ wheels = [
 ]
 
 [[package]]
+name = "petname"
+version = "2.9"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f5/74/8f0b5d5231e9045ef690342aa620e1a2f69d5eff1ec04803fc4fae6fe774/petname-2.9.tar.gz", hash = "sha256:df4e44b37c7907b5a5e1a74062d56a5845d7efb8833b21b557fdff99afff2d0c", size = 12956, upload-time = "2026-02-15T04:09:23.095Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d9/d7/6e9ca18d9d1d73e85be98664cca5d3422873e8838a6cfc84ff2096d9c88c/petname-2.9-py3-none-any.whl", hash = "sha256:57f2e0bb4292e9209b5ef02085a33525c638c07f5ec92ebd6db78e8bb574d238", size = 14093, upload-time = "2026-02-15T04:09:21.791Z" },
+]
+
+[[package]]
 name = "platformdirs"
 version = "4.9.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1079,10 +1088,11 @@ wheels = [
 [[package]]
 name = "railroad-club"
 version = "0.1.0"
-source = { git = "https://git.kcfam.us/gtfs.zone/railroad-club.git#7b727c3891b0a74cbf1e8a6a4f388009ec3d439f" }
+source = { git = "https://git.kcfam.us/gtfs.zone/railroad-club.git#b06c56b01c824f74aef672433bf3531e9c235e52" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
+    { name = "petname" },
     { name = "pydantic-settings" },
     { name = "sqlmodel" },
 ]

@@ -10,8 +10,8 @@ Today's date is used so the trip runs in wall-clock sync when --speed 1 is used.
 
 Positions are POSTed to cafe-car's `/ingest/position` (the direct HTTP ingest
 seam), authenticated with a shared bearer token. Each trip reports under
-vehicle_id=driver, trip_id=<trip>, so cafe-car's `vehicle:{driver}:*` scan picks
-it up.
+vehicle_id=tracker, trip_id=<trip>, so cafe-car's `vehicle:{tracker}:*` scan
+picks it up.
 
 Usage:
     # List available routes in the GTFS zip:
@@ -35,8 +35,8 @@ Usage:
     # Simulate every trip (load test):
     uv run scripts/simulate_trip.py --all-trips --speed 50 --quiet
 
-    # Custom driver, ingest endpoint, speed and interval:
-    uv run scripts/simulate_trip.py --driver bob \\
+    # Custom tracker, ingest endpoint, speed and interval:
+    uv run scripts/simulate_trip.py --tracker bob \\
         --ingest-url http://localhost:8000 --token dev-ingest-token \\
         --trip ELLSWB --speed 30 --interval 1
 
@@ -242,7 +242,7 @@ def main() -> int:
         action="store_true",
         help="Simulate every trip in the GTFS zip",
     )
-    parser.add_argument("--driver", default="bob", help="Driver username / vehicle_id (default: bob)")
+    parser.add_argument("--tracker", default="bob", help="Tracker id / vehicle_id (default: bob)")
     parser.add_argument(
         "--ingest-url",
         default="http://localhost:8000",
@@ -423,7 +423,7 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
     print(f"{prefix} Duration:   {trip_duration // 60:.0f} min  ({trip_duration}s scheduled)")
     print(f"{prefix} Delay:      {args.min_delay:.0f}–{args.max_delay:.0f}s (random walk, drift ±{args.delay_drift:.0f}s/tick, starting {delay_seconds:.0f}s)")
     print(f"{prefix} Speed:      {args.speed}x  →  real runtime ≈ {trip_duration / args.speed / 60:.1f} min")
-    print(f"{prefix} Ingest:     {args.ingest_url}/ingest/position  vehicle_id={args.driver}  trip_id={published_trip_id}")
+    print(f"{prefix} Ingest:     {args.ingest_url}/ingest/position  vehicle_id={args.tracker}  trip_id={published_trip_id}")
     print()
 
     position_url = f"{args.ingest_url.rstrip('/')}/ingest/position"
@@ -467,7 +467,7 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
                 tst = today_midnight + int(stop_schedule[0][0] + schedule_elapsed + delay_seconds)
 
             body = {
-                "vehicle_id": args.driver,
+                "vehicle_id": args.tracker,
                 "trip_id": published_trip_id,
                 "lat": round(lat, 6),
                 "lon": round(lon, 6),
@@ -483,7 +483,7 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
             current_stop = stop_times[stop_idx]
             trip_update_body = {
                 "trip_id": published_trip_id,
-                "vehicle_id": args.driver,
+                "vehicle_id": args.tracker,
                 "timestamp": tst,
                 "stop_time_updates": [
                     {

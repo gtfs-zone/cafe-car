@@ -13,11 +13,11 @@ from cafe_car.admin.auth import OIDCAuthBackend
 from cafe_car.admin.context import current_subject_var
 from cafe_car.admin.entity_router import router as entity_router
 from cafe_car.admin.views import (
-    DriverAdmin,
-    DriverRuleAdmin,
     FeedAdmin,
     InformedEntityAdmin,
     ServiceAlertAdmin,
+    TrackerAdmin,
+    TrackerRuleAdmin,
     TripAliasAdmin,
 )
 from cafe_car.database import get_engine, get_session_factory
@@ -80,8 +80,8 @@ def create_admin_app() -> FastAPI:
         templates_dir=templates_dir,
     )
     admin.add_view(FeedAdmin)
-    admin.add_view(DriverAdmin)
-    admin.add_view(DriverRuleAdmin)
+    admin.add_view(TrackerAdmin)
+    admin.add_view(TrackerRuleAdmin)
     admin.add_view(TripAliasAdmin)
     admin.add_view(ServiceAlertAdmin)
     admin.add_view(InformedEntityAdmin)
