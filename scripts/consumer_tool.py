@@ -507,6 +507,22 @@ function fmtDelay(d) {
   if (n === 0) return {text: 'on time', cls: 'ontime'};
   return {text: (n > 0 ? '+' : '') + n + 's', cls: n > 0 ? 'late' : 'early'};
 }
+// Same as fmtDelay but spells out h/m/s — used in map popups only; the sidebar
+// stays raw seconds.
+function fmtDelayHuman(d) {
+  if (d === undefined || d === null) return {text: '-', cls: 'dim'};
+  const n = Number(d);
+  if (n === 0) return {text: 'on time', cls: 'ontime'};
+  const cls = n > 0 ? 'late' : 'early';
+  let s = Math.abs(n);
+  const h = Math.floor(s / 3600); s -= h * 3600;
+  const m = Math.floor(s / 60);   s -= m * 60;
+  const parts = [];
+  if (h) parts.push(h + 'h');
+  if (m) parts.push(m + 'm');
+  if (s || !parts.length) parts.push(s + 's');
+  return {text: (n > 0 ? '+' : '-') + parts.join(''), cls};
+}
 // Prefer arrival, fall back to departure — matches how the feed fills these in.
 function stuDelay(stu) {
   if (!stu) return undefined;
@@ -583,19 +599,29 @@ evtSource.onmessage = function(e) {
   const tEnts = (d.trip_updates || {}).entity || [];
   const aEnts = (d.service_alerts || {}).entity || [];
 
+  // A >24h daily trip has several instances of one trip_id live at once, told
+  // apart by start_date — so join on (trip_id, start_date), not trip_id alone.
+  function tripKey(trip) {
+    const tid = trip && trip.trip_id;
+    if (!tid) return null;
+    const sd = trip && trip.start_date;
+    return sd ? tid + '\\x1f' + sd : tid;
+  }
+
   // Join vehicles to trip updates. vehicle_positions rewrites trip_id through
   // the feed's alias map while trip_updates does not, so the vehicle id is the
-  // more dependable key — index both and try trip_id first.
+  // more dependable key — index both and try the trip instance first.
   const tuByTrip = {}, tuByVehicle = {};
   tEnts.forEach(e => {
     const tu = e.trip_update || {};
-    if (tu.trip && tu.trip.trip_id) tuByTrip[tu.trip.trip_id] = tu;
+    const k = tripKey(tu.trip);
+    if (k) tuByTrip[k] = tu;
     if (tu.vehicle && tu.vehicle.id) tuByVehicle[tu.vehicle.id] = tu;
   });
   function tripUpdateFor(v) {
-    const tid = v.trip && v.trip.trip_id;
+    const k = tripKey(v.trip);
     const vid = v.vehicle && v.vehicle.id;
-    return (tid && tuByTrip[tid]) || (vid && tuByVehicle[vid]) || null;
+    return (k && tuByTrip[k]) || (vid && tuByVehicle[vid]) || null;
   }
 
   // The whole trip, not just the next few — stops already passed are dimmed so
@@ -606,7 +632,7 @@ evtSource.onmessage = function(e) {
     if (!stops.length) return '<div class="dim">no stop time updates</div>';
     const now = Date.now() / 1000;
     const rows = stops.map(s => {
-      const dl = fmtDelay(stuDelay(s));
+      const dl = fmtDelayHuman(stuDelay(s));
       const t = stuTime(s);
       const passed = t !== undefined && Number(t) < now;
       return `<tr class="${passed ? 'passed' : ''}">
@@ -622,13 +648,27 @@ evtSource.onmessage = function(e) {
   }
 
   // --- map markers ---
+  // setPopupContent below rebuilds the popup DOM each tick, which would reset
+  // the scroll of a stop table the user is reading. Leaflet keeps at most one
+  // popup open, so remember its scroll and restore it afterwards.
+  let popupScroll = null;
+  for (const [k, m] of Object.entries(markers)) {
+    if (m.isPopupOpen && m.isPopupOpen()) {
+      const wrap = m.getPopup().getElement()?.querySelector('.stopwrap');
+      popupScroll = { key: k, top: wrap ? wrap.scrollTop : 0 };
+    }
+  }
   const seen = new Set();
   vEnts.forEach(ent => {
     const v = ent.vehicle || {};
     const pos = v.position || {};
     const vid = (v.vehicle && v.vehicle.id) || ent.id;
     const tid = v.trip && v.trip.trip_id;
-    const key = tid || vid;
+    const sd = v.trip && v.trip.start_date;
+    // Key per trip instance: concurrent instances of one >24h trip share a
+    // trip_id and differ only by start_date, so keying on trip_id alone would
+    // collapse them back into a single marker.
+    const key = tripKey(v.trip) || vid;
     seen.add(key);
     const lat = num(pos.latitude, 0), lon = num(pos.longitude, 0);
     const icon = arrowIcon(num(pos.bearing, 0), '#2980b9');
@@ -638,6 +678,7 @@ evtSource.onmessage = function(e) {
                       : ((v.vehicle && v.vehicle.label) || vid);
     const popup = `<b>${esc(title)}</b><br>
       trip: ${esc(tid || '-')}<br>
+      ${sd ? `start: ${esc(sd)}<br>` : ''}
       route: ${esc((v.trip && v.trip.route_id) || '-')}<br>
       speed: ${num(pos.speed, 0).toFixed(1)} m/s<br>
       bearing: ${num(pos.bearing, 0).toFixed(0)}°<br>
@@ -653,6 +694,12 @@ evtSource.onmessage = function(e) {
   Object.keys(markers).forEach(id => {
     if (!seen.has(id)) { markers[id].remove(); delete markers[id]; }
   });
+
+  if (popupScroll && markers[popupScroll.key]) {
+    const wrap = markers[popupScroll.key].getPopup().getElement()
+      ?.querySelector('.stopwrap');
+    if (wrap) wrap.scrollTop = popupScroll.top;
+  }
 
   if (firstData && vEnts.length > 0) {
     firstData = false;
@@ -670,15 +717,17 @@ evtSource.onmessage = function(e) {
     const pos = v.position || {};
     const vid = (v.vehicle && v.vehicle.id) || ent.id;
     const tid = v.trip && v.trip.trip_id;
+    const sd = v.trip && v.trip.start_date;
     const summary = `<span class="label">${esc(tid
       || (v.vehicle && v.vehicle.label) || vid)}</span>
+      ${sd ? `<span class="dim">start=</span>${esc(sd)} ` : ''}
       <span class="dim">veh=</span>${esc((v.vehicle && v.vehicle.label) || vid)}
       <span class="dim">rt=</span>${esc((v.trip && v.trip.route_id) || '-')}
       ${num(pos.speed, 0).toFixed(1)}m/s
       <span class="dim">${esc(v.current_status || '')}</span>`;
     // Entity ids are renumbered on every request, so key the open/closed state
-    // on something stable across polls.
-    return entityBlock('v' + ((v.trip && v.trip.trip_id) || vid), summary, ent);
+    // on something stable across polls — the trip instance (trip_id+start_date).
+    return entityBlock('v' + (tripKey(v.trip) || vid), summary, ent);
   }).join('') || '<div class="none">None</div>';
 
   // --- sidebar: trip updates ---
@@ -692,11 +741,13 @@ evtSource.onmessage = function(e) {
       ? `next=${esc(nxt.stop_id || '?')} @ ${fmtTime(stuTime(nxt))}
          <span class="${dl.cls}">${dl.text}</span>`
       : '<span class="dim">no stops</span>';
+    const sd = tu.trip && tu.trip.start_date;
     const summary = `<span class="label">${esc((tu.trip && tu.trip.trip_id)
       || ent.id)}</span>
+      ${sd ? `<span class="dim">start=</span>${esc(sd)} ` : ''}
       <span class="dim">veh=</span>${esc((tu.vehicle && tu.vehicle.id) || '-')}
       ${stus.length} stop${stus.length === 1 ? '' : 's'}<br>${nextStr}`;
-    return entityBlock('t' + ((tu.trip && tu.trip.trip_id) || ent.id), summary, ent);
+    return entityBlock('t' + (tripKey(tu.trip) || ent.id), summary, ent);
   }).join('') || '<div class="none">None</div>';
 
   // --- sidebar: service alerts ---
