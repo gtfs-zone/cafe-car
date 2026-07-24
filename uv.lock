@@ -1088,7 +1088,7 @@ wheels = [
 [[package]]
 name = "railroad-club"
 version = "0.1.0"
-source = { git = "https://git.kcfam.us/gtfs.zone/railroad-club.git#b06c56b01c824f74aef672433bf3531e9c235e52" }
+source = { git = "https://git.kcfam.us/gtfs.zone/railroad-club.git#15f40d09192519270f010a1969b123cc8da02610" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
