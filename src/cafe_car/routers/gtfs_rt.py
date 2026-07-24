@@ -53,7 +53,9 @@ async def trip_updates(
 
     redis = request.app.state.redis
 
-    seen_trip_ids: set[str] = set()
+    # A >24h daily trip has several instances of the same trip_id live at once,
+    # distinguished by start_date — so dedup on the pair, not trip_id alone.
+    seen: set[tuple[str, str | None]] = set()
     entity_id = 0
     for driver in drivers:
         async for key in redis.scan_iter(f"vehicle:{driver.username}:*"):
@@ -62,15 +64,21 @@ async def trip_updates(
                 continue
             vehicle_data = json.loads(vehicle_raw)
             trip_id = vehicle_data.get("trip_id")
-            if not trip_id or trip_id in seen_trip_ids:
+            start_date = vehicle_data.get("start_date")
+            if not trip_id or (trip_id, start_date) in seen:
                 continue
 
-            trip_raw = await redis.get(f"trip_update:{trip_id}")
+            tu_key = (
+                f"trip_update:{trip_id}:{start_date}"
+                if start_date
+                else f"trip_update:{trip_id}"
+            )
+            trip_raw = await redis.get(tu_key)
             if trip_raw is None:
                 continue
             trip_data = json.loads(trip_raw)
 
-            seen_trip_ids.add(trip_id)
+            seen.add((trip_id, start_date))
             entity_id += 1
             entity = msg.entity.add()
             entity.id = str(entity_id)
@@ -78,6 +86,8 @@ async def trip_updates(
             entity.trip_update.trip.schedule_relationship = (
                 gtfs_realtime_pb2.TripDescriptor.SCHEDULED
             )
+            if start_date:
+                entity.trip_update.trip.start_date = start_date
             entity.trip_update.vehicle.id = trip_data["vehicle_id"]
             entity.trip_update.timestamp = trip_data["timestamp"]
             for update in _stop_time_updates(trip_data):
@@ -176,6 +186,10 @@ async def vehicle_positions(
                 entity.vehicle.trip.schedule_relationship = (
                     gtfs_realtime_pb2.TripDescriptor.SCHEDULED
                 )
+                # start_date disambiguates concurrent instances of a >24h daily
+                # trip (see ingest.py); pass it through so consumers can too.
+                if start_date := data.get("start_date"):
+                    entity.vehicle.trip.start_date = start_date
                 if route_id := data.get("route_id"):
                     entity.vehicle.trip.route_id = route_id
             entity.vehicle.current_status = (

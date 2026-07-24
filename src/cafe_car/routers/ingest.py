@@ -36,6 +36,10 @@ class PositionIngest(BaseModel):
     speed: float | None = None  # metres/second (the vehicle:* contract)
     timestamp: int  # epoch seconds
     route_id: str | None = None
+    # GTFS-RT service date (YYYYMMDD). A >24h daily trip (Amtrak long-distance)
+    # has several instances of the same trip_id en route at once; start_date is
+    # what tells them apart — without it they collide on one Redis key.
+    start_date: str | None = None
 
 
 class StopTimeUpdateIngest(BaseModel):
@@ -56,6 +60,21 @@ class TripUpdateIngest(BaseModel):
     vehicle_id: str
     timestamp: int  # epoch seconds
     stop_time_updates: list[StopTimeUpdateIngest]
+    start_date: str | None = None  # see PositionIngest.start_date
+
+
+def _vehicle_key(vehicle_id: str, trip_id: str, start_date: str | None) -> str:
+    # Appending start_date (when present) gives concurrent instances of one
+    # long-running daily trip distinct keys. The `vehicle:{username}:*` scan in
+    # gtfs_rt.py still matches.
+    slug = f"{trip_id}:{start_date}" if start_date else trip_id
+    return f"vehicle:{vehicle_id}:{slug}"
+
+
+def _trip_update_key(trip_id: str, start_date: str | None) -> str:
+    if start_date:
+        return f"trip_update:{trip_id}:{start_date}"
+    return f"trip_update:{trip_id}"
 
 
 def _check_auth(authorization: str | None) -> None:
@@ -90,11 +109,10 @@ async def ingest_position(
     }
     if body.route_id:
         record["route_id"] = body.route_id
+    if body.start_date:
+        record["start_date"] = body.start_date
 
-    # trip_id is the key slug so one vehicle_id (e.g. Amtrak's shared
-    # "amtrakdriver") can report many concurrent trains under distinct keys —
-    # matching cafe-car's `vehicle:{username}:*` scan.
-    key = f"vehicle:{body.vehicle_id}:{body.trip_id}"
+    key = _vehicle_key(body.vehicle_id, body.trip_id, body.start_date)
     await request.app.state.redis.setex(key, POSITION_TTL, json.dumps(record))
     return {"status": "ok"}
 
@@ -118,6 +136,8 @@ async def ingest_trip_update(
             stu.model_dump(exclude_none=True) for stu in body.stop_time_updates
         ],
     }
-    key = f"trip_update:{body.trip_id}"
+    if body.start_date:
+        record["start_date"] = body.start_date
+    key = _trip_update_key(body.trip_id, body.start_date)
     await request.app.state.redis.setex(key, TRIP_UPDATE_TTL, json.dumps(record))
     return {"status": "ok"}
