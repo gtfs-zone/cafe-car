@@ -98,14 +98,21 @@ def get_traccar_client() -> TraccarClient:
     )
 
 
+TRACCAR_CLIENT_SCHEME = "org.traccar.client://config"
+
+
 def build_config_url(username: str, settings: Settings | None = None) -> str:
     """Build the Traccar Client provisioning URL for a driver.
 
-    Shape: ``{traccar_client_base}?id={username}&{traccar_default_profile}``.
+    Shape: ``org.traccar.client://config?url={server}&id={username}&{profile}``,
+    where ``server`` is the phone-reachable Traccar endpoint the client posts to.
     """
     settings = settings or get_settings()
-    base = settings.traccar_client_base.rstrip("/")
-    return f"{base}?id={quote(username, safe='')}&{settings.traccar_default_profile}"
+    server = settings.traccar_client_base.rstrip("/")
+    return (
+        f"{TRACCAR_CLIENT_SCHEME}?url={server}"
+        f"&id={quote(username, safe='')}&{settings.traccar_default_profile}"
+    )
 
 
 def qr_svg(data: str, *, scale: int = 4) -> str:

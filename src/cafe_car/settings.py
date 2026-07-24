@@ -25,8 +25,9 @@ class Settings(BaseSettings):
     traccar_api_token: str | None = None
     traccar_email: str | None = None
     traccar_password: str | None = None
-    # Phone-reachable base the Traccar Client connects to (osmand :5055). Must be
-    # reachable from the driver's phone, not just the host — parameterize per env.
+    # Phone-reachable Traccar endpoint the Traccar Client posts to (osmand :5055).
+    # Emitted as the `url=` param of the org.traccar.client://config deep link, so
+    # it must be reachable from the driver's phone, not just the host.
     traccar_client_base: str = "http://localhost:5055"
     # Single global tracking profile baked into every provisioning QR/URL.
     traccar_default_profile: str = (
