@@ -11,7 +11,6 @@ from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
 from railroad_club.models.tracker import Tracker
 from railroad_club.models.tracker_rule import TrackerRule
-from railroad_club.models.trip_alias import TripAlias
 from railroad_club.models.user import User
 from sqladmin import ModelView
 from sqlalchemy import Select, func, select
@@ -621,111 +620,6 @@ class InformedEntityAdmin(ModelView, model=InformedEntity):
 
     async def delete_model(self, request: Request, pk: str | int) -> None:
         await self._get_owned_entity(request, pk)
-        await super().delete_model(request, pk)
-
-
-class TripAliasAdmin(ModelView, model=TripAlias):
-    form_args: ClassVar[dict] = {
-        "alias": {
-            "validators": [
-                Length(min=1, max=64, message="alias must be 1-64 characters"),
-                Regexp(r"^[a-zA-Z0-9]+$", message="alias must be alphanumeric only"),
-            ]
-        },
-        "trip_id": {
-            "validators": [
-                Length(min=1, max=256, message="trip_id must be 1-256 characters")
-            ]
-        },
-    }
-    column_list: ClassVar[list] = [TripAlias.alias, TripAlias.trip_id, "feed"]
-    column_searchable_list: ClassVar[list] = [TripAlias.alias, TripAlias.trip_id]
-    form_excluded_columns: ClassVar[list] = ["feed"]
-    name = "Trip Alias"
-    name_plural = "Trip Aliases"
-
-    async def scaffold_form(self, rules: list | None = None) -> type:
-        Form = await super().scaffold_form(rules)
-        subject = current_subject_var.get()
-        async with self.session_maker() as session:
-            result = await session.execute(
-                select(Feed)
-                .join(User, Feed.owner_id == User.id)
-                .where(User.provider_subject == subject)
-            )
-            feeds = result.scalars().all()
-        Form.feed_id = SelectField(
-            "Feed Name",
-            choices=[(f.id, f.feed_name) for f in feeds],
-            coerce=int,
-        )
-        return Form
-
-    def _base_query(self, subject: str) -> Select[tuple[TripAlias]]:
-        return (
-            select(TripAlias)
-            .join(Feed, TripAlias.feed_id == Feed.id)
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
-        )
-
-    def list_query(self, request: Request) -> Select[tuple[TripAlias]]:
-        return self._base_query(_current_subject(request))
-
-    def count_query(self, request: Request) -> Select[tuple[int]]:
-        subject = _current_subject(request)
-        return (
-            select(func.count(TripAlias.id))
-            .join(Feed, TripAlias.feed_id == Feed.id)
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
-        )
-
-    def details_query(self, request: Request) -> Select[tuple[TripAlias]]:
-        pk = request.path_params["pk"]
-        subject = _current_subject(request)
-        return self._base_query(subject).where(TripAlias.id == int(pk))
-
-    def form_edit_query(self, request: Request) -> Select[tuple[TripAlias]]:
-        pk = request.path_params["pk"]
-        subject = _current_subject(request)
-        return self._base_query(subject).where(TripAlias.id == int(pk))
-
-    async def insert_model(self, request: Request, data: dict) -> TripAlias:
-        subject = _current_subject(request)
-        session: AsyncSession = request.state.session
-        feed_id = data.get("feed_id")
-        if not feed_id:
-            raise ValueError("A feed must be selected")
-        result = await session.execute(
-            select(Feed)
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
-            .where(Feed.id == feed_id)
-        )
-        if result.scalar_one_or_none() is None:
-            raise PermissionError("Feed not found or access denied")
-        return await super().insert_model(request, data)
-
-    async def _get_owned_alias(self, request: Request, pk: str | int) -> TripAlias:
-        subject = _current_subject(request)
-        session: AsyncSession = request.state.session
-        result = await session.execute(
-            self._base_query(subject).where(TripAlias.id == int(pk))
-        )
-        alias = result.scalar_one_or_none()
-        if alias is None:
-            raise PermissionError("Trip alias not found or access denied")
-        return alias
-
-    async def update_model(
-        self, request: Request, pk: str | int, data: dict
-    ) -> TripAlias:
-        await self._get_owned_alias(request, pk)
-        return await super().update_model(request, pk, data)
-
-    async def delete_model(self, request: Request, pk: str | int) -> None:
-        await self._get_owned_alias(request, pk)
         await super().delete_model(request, pk)
 
 

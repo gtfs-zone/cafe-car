@@ -7,7 +7,6 @@ from fastapi.responses import Response
 from google.transit import gtfs_realtime_pb2
 from railroad_club.models.feed import Feed
 from railroad_club.models.service_alert import ServiceAlert
-from railroad_club.models.trip_alias import TripAlias
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -15,11 +14,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from cafe_car.database import get_session
 
 router = APIRouter()
-
-
-async def _alias_map(feed_id: int, session: AsyncSession) -> dict[str, str]:
-    result = await session.exec(select(TripAlias).where(TripAlias.feed_id == feed_id))
-    return {a.alias: a.trip_id for a in result.all()}
 
 PROTOBUF_CONTENT_TYPE = "application/x-protobuf"
 
@@ -156,7 +150,6 @@ async def vehicle_positions(
     trackers = result.all()
 
     redis = request.app.state.redis
-    alias_map = await _alias_map(feed.id, session)
 
     entity_id = 0
     for tracker in trackers:
@@ -184,7 +177,7 @@ async def vehicle_positions(
                 # A tracker with no active rule resolves trip_id to None; that is
                 # a valid position (GTFS-RT trip is optional) and must not crash
                 # the whole feed by assigning None to a protobuf string field.
-                entity.vehicle.trip.trip_id = alias_map.get(trip_id, trip_id)
+                entity.vehicle.trip.trip_id = trip_id
                 entity.vehicle.trip.schedule_relationship = (
                     gtfs_realtime_pb2.TripDescriptor.SCHEDULED
                 )

@@ -18,7 +18,6 @@ from cafe_car.admin.views import (
     ServiceAlertAdmin,
     TrackerAdmin,
     TrackerRuleAdmin,
-    TripAliasAdmin,
 )
 from cafe_car.database import get_engine, get_session_factory
 from cafe_car.settings import get_settings
@@ -82,7 +81,6 @@ def create_admin_app() -> FastAPI:
     admin.add_view(FeedAdmin)
     admin.add_view(TrackerAdmin)
     admin.add_view(TrackerRuleAdmin)
-    admin.add_view(TripAliasAdmin)
     admin.add_view(ServiceAlertAdmin)
     admin.add_view(InformedEntityAdmin)
 
