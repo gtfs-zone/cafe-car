@@ -3,6 +3,8 @@
 
 import argparse
 import contextlib
+import csv
+import io
 import json
 import os
 import queue
@@ -10,6 +12,7 @@ import sys
 import threading
 import time
 import urllib.request
+import zipfile
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -482,6 +485,14 @@ MAP_HTML = """\
 </div>
 <div id="statusbar">Connecting…</div>
 <script>
+// route_id -> display name, injected from a GTFS routes.txt when --gtfs is
+// given (GTFS-RT carries only route_id, not the name). Empty otherwise.
+const ROUTE_NAMES = __ROUTE_NAMES__;
+function routeName(id) {
+  if (!id) return '-';
+  return ROUTE_NAMES[id] || id;
+}
+
 const map = L.map('map').setView([0, 0], 2);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap contributors', maxZoom: 19
@@ -679,7 +690,7 @@ evtSource.onmessage = function(e) {
     const popup = `<b>${esc(title)}</b><br>
       trip: ${esc(tid || '-')}<br>
       ${sd ? `start: ${esc(sd)}<br>` : ''}
-      route: ${esc((v.trip && v.trip.route_id) || '-')}<br>
+      route: ${esc(routeName(v.trip && v.trip.route_id))}<br>
       speed: ${num(pos.speed, 0).toFixed(1)} m/s<br>
       bearing: ${num(pos.bearing, 0).toFixed(0)}°<br>
       status: ${esc(v.current_status || '-')}<br>
@@ -802,6 +813,28 @@ evtSource.onerror = function() {
 _client_queues: list[queue.Queue] = []
 _client_queues_lock = threading.Lock()
 
+# route_id -> display name, populated from --gtfs and injected into the map HTML.
+_route_names: dict[str, str] = {}
+
+
+def load_route_names(source: str) -> dict[str, str]:
+    """route_id -> name from a GTFS zip's routes.txt (local path or http URL)."""
+    if source.startswith(("http://", "https://")):
+        raw = fetch(source, timeout=60)
+    else:
+        with open(source, "rb") as f:
+            raw = f.read()
+    names: dict[str, str] = {}
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        text = zf.read("routes.txt").decode("utf-8-sig")
+    for row in csv.DictReader(io.StringIO(text)):
+        rid = row.get("route_id")
+        if not rid:
+            continue
+        name = row.get("route_long_name") or row.get("route_short_name") or rid
+        names[rid] = name.strip()
+    return names
+
 
 def push_to_map(data: dict) -> None:
     def _dump(msg):
@@ -828,7 +861,9 @@ def push_to_map(data: dict) -> None:
 class MapHandler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         if self.path == "/":
-            body = MAP_HTML.encode()
+            body = MAP_HTML.replace(
+                "__ROUTE_NAMES__", json.dumps(_route_names)
+            ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -866,6 +901,15 @@ class MapHandler(BaseHTTPRequestHandler):
 
 
 def run_map(args) -> None:
+    if args.gtfs:
+        try:
+            _route_names.update(load_route_names(args.gtfs))
+            print(f"Loaded {len(_route_names)} route names from {args.gtfs}",
+                  file=sys.stderr)
+        except Exception as exc:
+            print(f"WARN: could not load routes from {args.gtfs}: {exc}",
+                  file=sys.stderr)
+
     server = HTTPServer(("localhost", args.map_port), MapHandler)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
@@ -924,6 +968,9 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Host a Leaflet map at http://localhost:<map-port>")
     mapg.add_argument("--map-port", type=int, default=8765,
                       metavar="N", help="Port for map server (default: 8765)")
+    mapg.add_argument("--gtfs", metavar="PATH_OR_URL",
+                      help="GTFS zip (local path or http URL) to resolve "
+                           "route_id → route name in map popups")
 
     conn = p.add_argument_group("connection")
     conn.add_argument("--backend", default="http://localhost:8000",
