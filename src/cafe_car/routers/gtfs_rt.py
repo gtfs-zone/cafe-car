@@ -164,14 +164,18 @@ async def vehicle_positions(
                 entity.vehicle.position.bearing = data["bearing"]
             if data["speed"] is not None:
                 entity.vehicle.position.speed = data["speed"]
-            entity.vehicle.trip.trip_id = alias_map.get(
-                data["trip_id"], data["trip_id"]
-            )
-            entity.vehicle.trip.schedule_relationship = (
-                gtfs_realtime_pb2.TripDescriptor.SCHEDULED
-            )
-            if route_id := data.get("route_id"):
-                entity.vehicle.trip.route_id = route_id
+            trip_id = data.get("trip_id")
+            if trip_id is not None:
+                # Only emit a TripDescriptor when the vehicle is tied to a trip.
+                # A driver with no active rule resolves trip_id to None; that is
+                # a valid position (GTFS-RT trip is optional) and must not crash
+                # the whole feed by assigning None to a protobuf string field.
+                entity.vehicle.trip.trip_id = alias_map.get(trip_id, trip_id)
+                entity.vehicle.trip.schedule_relationship = (
+                    gtfs_realtime_pb2.TripDescriptor.SCHEDULED
+                )
+                if route_id := data.get("route_id"):
+                    entity.vehicle.trip.route_id = route_id
             entity.vehicle.current_status = (
                 gtfs_realtime_pb2.VehiclePosition.IN_TRANSIT_TO
             )
