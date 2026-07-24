@@ -1,0 +1,15 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic:
+      - generic [ref=e3]:
+        - button "Zoom in" [ref=e4] [cursor=pointer]: +
+        - button "Zoom out" [ref=e5] [cursor=pointer]: −
+      - generic [ref=e6]:
+        - link "Leaflet" [ref=e7] [cursor=pointer]:
+          - /url: https://leafletjs.com
+        - text: "| © OpenStreetMap contributors"
+  - generic [ref=e12]:
+    - heading "Vehicles" [level=3] [ref=e13]
+    - heading "Trip Updates" [level=3] [ref=e14]
+    - heading "Service Alerts" [level=3] [ref=e15]
+  - generic: Connecting…

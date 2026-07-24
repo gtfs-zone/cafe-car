@@ -111,14 +111,16 @@ def _fill_stop_time_update(stu: object, update: dict) -> None:
         stu.stop_id = update["stop_id"]
     if update.get("stop_sequence") is not None:
         stu.stop_sequence = update["stop_sequence"]
-    # Absolute time wins over delay when both are supplied.
+    # Time and delay are independent: GTFS-RT permits both in one StopTimeEvent,
+    # and dropping the delay when a time is present left consumers unable to show
+    # lateness at all.
     if update.get("arrival_time") is not None:
         stu.arrival.time = update["arrival_time"]
-    elif update.get("arrival_delay") is not None:
+    if update.get("arrival_delay") is not None:
         stu.arrival.delay = update["arrival_delay"]
     if update.get("departure_time") is not None:
         stu.departure.time = update["departure_time"]
-    elif update.get("departure_delay") is not None:
+    if update.get("departure_delay") is not None:
         stu.departure.delay = update["departure_delay"]
     sr = update.get("schedule_relationship")
     stu.schedule_relationship = (

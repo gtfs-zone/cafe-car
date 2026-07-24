@@ -421,16 +421,45 @@ MAP_HTML = """\
   body { display:flex; height:100vh; }
   #map { flex:1; min-width:0; }
   #sidebar {
-    width:300px; height:100%; overflow-y:auto;
+    width:380px; height:100%; overflow-y:auto;
     background:#1e1e1e; color:#ddd; font:13px/1.5 monospace;
     padding:8px; box-sizing:border-box; flex-shrink:0;
   }
-  #sidebar h3 { margin:4px 0 8px; color:#7ec8e3; font-size:14px; }
-  .vehicle-item, .alert-item {
-    border-bottom:1px solid #333; padding:4px 0; font-size:12px;
+  #sidebar h3 { margin:12px 0 2px; color:#7ec8e3; font-size:14px; }
+  #sidebar h3:first-child { margin-top:4px; }
+  .feedhdr { color:#888; font-size:11px; margin-bottom:6px; }
+  .item { border-bottom:1px solid #333; padding:4px 0; font-size:12px; }
+  .item .label { font-weight:bold; color:#fff; }
+  .item .ah { color:#f0c060; }
+  .item .dim { color:#888; }
+  .none { color:#888; font-size:12px; }
+  details summary {
+    cursor:pointer; color:#7a9; font-size:11px; outline:none; padding:1px 0;
   }
-  .vehicle-item span.label { font-weight:bold; color:#fff; }
-  .alert-item .ah { color:#f0c060; }
+  details pre {
+    margin:2px 0 4px; padding:6px; background:#141414; border-radius:3px;
+    font-size:11px; line-height:1.35; overflow-x:auto; white-space:pre;
+    color:#c8c8c8;
+  }
+  /* Whole trips can run to dozens of stops — scroll rather than grow a popup
+     taller than the map. */
+  .stopwrap { max-height:220px; overflow-y:auto; margin-top:4px; }
+  table.stops { border-collapse:collapse; font-size:11px; }
+  table.stops th, table.stops td { padding:1px 6px 1px 0; text-align:left; }
+  table.stops th {
+    color:#0b6fa4; font-weight:normal; position:sticky; top:0;
+    background:#fff; text-align:left;
+  }
+  table.stops tr.passed td { opacity:0.45; }
+  .late { color:#e06c60; }
+  .early { color:#6ba7e0; }
+  .ontime { color:#79c17a; }
+  /* Popups sit on white, so the sidebar's light-on-dark palette needs darker
+     variants to stay readable. */
+  .leaflet-popup-content .late { color:#c0392b; }
+  .leaflet-popup-content .early { color:#1f6fb2; }
+  .leaflet-popup-content .ontime { color:#2e7d32; }
+  .leaflet-popup-content .dim { color:#777; }
   #statusbar {
     position:absolute; bottom:8px; left:8px; z-index:9999;
     background:rgba(0,0,0,0.65); color:#fff; padding:4px 10px;
@@ -442,8 +471,13 @@ MAP_HTML = """\
 <div id="map"></div>
 <div id="sidebar">
   <h3>Vehicles</h3>
+  <div class="feedhdr" id="vhdr"></div>
   <div id="vlist"></div>
-  <h3 style="margin-top:12px">Service Alerts</h3>
+  <h3>Trip Updates</h3>
+  <div class="feedhdr" id="thdr"></div>
+  <div id="tlist"></div>
+  <h3>Service Alerts</h3>
+  <div class="feedhdr" id="ahdr"></div>
   <div id="alist"></div>
 </div>
 <div id="statusbar">Connecting…</div>
@@ -455,6 +489,76 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 
 const markers = {};
 let firstData = true;
+
+// MessageToDict omits scalars equal to their default, so `speed: 0` and
+// `delay: 0` arrive as undefined rather than 0 — always supply a fallback.
+function num(v, dflt) { return (v === undefined || v === null) ? dflt : Number(v); }
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+function fmtTime(t) {
+  if (t === undefined || t === null) return '-';
+  return new Date(Number(t) * 1000).toTimeString().slice(0, 8);
+}
+function fmtDelay(d) {
+  if (d === undefined || d === null) return {text: '-', cls: 'dim'};
+  const n = Number(d);
+  if (n === 0) return {text: 'on time', cls: 'ontime'};
+  return {text: (n > 0 ? '+' : '') + n + 's', cls: n > 0 ? 'late' : 'early'};
+}
+// Prefer arrival, fall back to departure — matches how the feed fills these in.
+function stuDelay(stu) {
+  if (!stu) return undefined;
+  if (stu.arrival && stu.arrival.delay !== undefined) return stu.arrival.delay;
+  if (stu.departure && stu.departure.delay !== undefined) return stu.departure.delay;
+  return undefined;
+}
+function stuTime(stu) {
+  if (!stu) return undefined;
+  if (stu.arrival && stu.arrival.time !== undefined) return stu.arrival.time;
+  if (stu.departure && stu.departure.time !== undefined) return stu.departure.time;
+  return undefined;
+}
+// The next few stops: those still in the future, else just the head of the list.
+function nextStops(tu, n) {
+  const stus = (tu && tu.stop_time_update) || [];
+  const now = Date.now() / 1000;
+  const future = stus.filter(s => {
+    const t = stuTime(s);
+    return t !== undefined && Number(t) >= now;
+  });
+  return (future.length ? future : stus).slice(0, n);
+}
+
+// One sidebar row: readable summary line + the entity's complete JSON.
+function entityBlock(id, summaryHtml, obj) {
+  return `<div class="item">${summaryHtml}
+    <details data-eid="${esc(id)}"><summary>raw</summary>
+    <pre>${esc(JSON.stringify(obj, null, 2))}</pre></details></div>`;
+}
+
+function feedHeader(feed) {
+  const h = (feed && feed.header) || {};
+  const n = ((feed && feed.entity) || []).length;
+  return `v${h.gtfs_realtime_version || '?'} · `
+    + `${h.incrementality || 'FULL_DATASET'} · `
+    + `${fmtTime(h.timestamp)} · ${n} entit${n === 1 ? 'y' : 'ies'}`;
+}
+
+// Re-rendering innerHTML every tick would slam shut any <details> the user
+// opened, so remember which ones were open and restore them afterwards.
+function openIds() {
+  const s = new Set();
+  document.querySelectorAll('#sidebar details[open]').forEach(
+    d => s.add(d.dataset.eid));
+  return s;
+}
+function restoreOpen(s) {
+  document.querySelectorAll('#sidebar details').forEach(d => {
+    if (s.has(d.dataset.eid)) d.open = true;
+  });
+}
 
 function arrowIcon(bearing, color) {
   const rot = bearing || 0;
@@ -472,59 +576,169 @@ function arrowIcon(bearing, color) {
 const evtSource = new EventSource('/stream');
 evtSource.onmessage = function(e) {
   const d = JSON.parse(e.data);
-  const now = new Date(d.timestamp);
-  const timeStr = now.toTimeString().slice(0,8);
+  const timeStr = new Date(d.timestamp).toTimeString().slice(0,8);
+  const wasOpen = openIds();
 
-  // vehicles
+  const vEnts = (d.vehicles || {}).entity || [];
+  const tEnts = (d.trip_updates || {}).entity || [];
+  const aEnts = (d.service_alerts || {}).entity || [];
+
+  // Join vehicles to trip updates. vehicle_positions rewrites trip_id through
+  // the feed's alias map while trip_updates does not, so the vehicle id is the
+  // more dependable key — index both and try trip_id first.
+  const tuByTrip = {}, tuByVehicle = {};
+  tEnts.forEach(e => {
+    const tu = e.trip_update || {};
+    if (tu.trip && tu.trip.trip_id) tuByTrip[tu.trip.trip_id] = tu;
+    if (tu.vehicle && tu.vehicle.id) tuByVehicle[tu.vehicle.id] = tu;
+  });
+  function tripUpdateFor(v) {
+    const tid = v.trip && v.trip.trip_id;
+    const vid = v.vehicle && v.vehicle.id;
+    return (tid && tuByTrip[tid]) || (vid && tuByVehicle[vid]) || null;
+  }
+
+  // The whole trip, not just the next few — stops already passed are dimmed so
+  // the upcoming ones still read first.
+  function stopsTable(tu) {
+    if (!tu) return '<div class="dim">no trip update for this vehicle</div>';
+    const stops = (tu.stop_time_update) || [];
+    if (!stops.length) return '<div class="dim">no stop time updates</div>';
+    const now = Date.now() / 1000;
+    const rows = stops.map(s => {
+      const dl = fmtDelay(stuDelay(s));
+      const t = stuTime(s);
+      const passed = t !== undefined && Number(t) < now;
+      return `<tr class="${passed ? 'passed' : ''}">
+        <td>${num(s.stop_sequence, '-')}</td>
+        <td>${esc(s.stop_id || '-')}</td>
+        <td>${fmtTime(s.arrival && s.arrival.time)}</td>
+        <td>${fmtTime(s.departure && s.departure.time)}</td>
+        <td class="${dl.cls}">${dl.text}</td></tr>`;
+    }).join('');
+    return `<div class="stopwrap"><table class="stops">
+      <tr><th>seq</th><th>stop</th><th>arr</th><th>dep</th><th>delay</th></tr>
+      ${rows}</table></div>`;
+  }
+
+  // --- map markers ---
   const seen = new Set();
-  (d.vehicles || []).forEach(v => {
-    const key = v.trip_id || v.id;
+  vEnts.forEach(ent => {
+    const v = ent.vehicle || {};
+    const pos = v.position || {};
+    const vid = (v.vehicle && v.vehicle.id) || ent.id;
+    const tid = v.trip && v.trip.trip_id;
+    const key = tid || vid;
     seen.add(key);
-    const icon = arrowIcon(v.bearing, '#2980b9');
-    const popup = `<b>${v.label || v.id}</b><br>
-      trip: ${v.trip_id || '-'}<br>
-      route: ${v.route_id || '-'}<br>
-      speed: ${v.speed != null ? v.speed.toFixed(1)+' m/s' : '-'}<br>
-      bearing: ${v.bearing != null ? v.bearing.toFixed(0)+'°' : '-'}<br>
-      status: ${v.status || '-'}`;
+    const lat = num(pos.latitude, 0), lon = num(pos.longitude, 0);
+    const icon = arrowIcon(num(pos.bearing, 0), '#2980b9');
+    // One producer can report many trains under a single vehicle id (Amtrak
+    // publishes every train as "amtrakdriver"), so lead with the trip.
+    const title = tid ? `${tid} · ${(v.vehicle && v.vehicle.label) || vid}`
+                      : ((v.vehicle && v.vehicle.label) || vid);
+    const popup = `<b>${esc(title)}</b><br>
+      trip: ${esc(tid || '-')}<br>
+      route: ${esc((v.trip && v.trip.route_id) || '-')}<br>
+      speed: ${num(pos.speed, 0).toFixed(1)} m/s<br>
+      bearing: ${num(pos.bearing, 0).toFixed(0)}°<br>
+      status: ${esc(v.current_status || '-')}<br>
+      updated: ${fmtTime(v.timestamp)}
+      ${stopsTable(tripUpdateFor(v))}`;
     if (markers[key]) {
-      markers[key].setLatLng([v.lat, v.lon]).setIcon(icon).setPopupContent(popup);
+      markers[key].setLatLng([lat, lon]).setIcon(icon).setPopupContent(popup);
     } else {
-      markers[key] = L.marker([v.lat, v.lon], {icon}).bindPopup(popup).addTo(map);
+      markers[key] = L.marker([lat, lon], {icon}).bindPopup(popup).addTo(map);
     }
   });
-  // remove stale
   Object.keys(markers).forEach(id => {
     if (!seen.has(id)) { markers[id].remove(); delete markers[id]; }
   });
 
-  // auto-fit on first data
-  if (firstData && d.vehicles && d.vehicles.length > 0) {
+  if (firstData && vEnts.length > 0) {
     firstData = false;
-    const latlngs = d.vehicles.map(v => [v.lat, v.lon]);
+    const latlngs = vEnts.map(ent => {
+      const p = (ent.vehicle || {}).position || {};
+      return [num(p.latitude, 0), num(p.longitude, 0)];
+    });
     map.fitBounds(L.latLngBounds(latlngs).pad(0.2));
   }
 
-  // sidebar vehicles
-  const vlist = document.getElementById('vlist');
-  vlist.innerHTML = (d.vehicles || []).map(v =>
-    `<div class="vehicle-item"><span class="label">${v.label || v.id}</span>
-     trip=${v.trip_id||'-'} rt=${v.route_id||'-'}
-     ${v.speed!=null?v.speed.toFixed(1)+'m/s':''}</div>`
-  ).join('') || '<div style="color:#888">None</div>';
+  // --- sidebar: vehicles ---
+  document.getElementById('vhdr').textContent = feedHeader(d.vehicles);
+  document.getElementById('vlist').innerHTML = vEnts.map(ent => {
+    const v = ent.vehicle || {};
+    const pos = v.position || {};
+    const vid = (v.vehicle && v.vehicle.id) || ent.id;
+    const tid = v.trip && v.trip.trip_id;
+    const summary = `<span class="label">${esc(tid
+      || (v.vehicle && v.vehicle.label) || vid)}</span>
+      <span class="dim">veh=</span>${esc((v.vehicle && v.vehicle.label) || vid)}
+      <span class="dim">rt=</span>${esc((v.trip && v.trip.route_id) || '-')}
+      ${num(pos.speed, 0).toFixed(1)}m/s
+      <span class="dim">${esc(v.current_status || '')}</span>`;
+    // Entity ids are renumbered on every request, so key the open/closed state
+    // on something stable across polls.
+    return entityBlock('v' + ((v.trip && v.trip.trip_id) || vid), summary, ent);
+  }).join('') || '<div class="none">None</div>';
 
-  // sidebar alerts
-  const alist = document.getElementById('alist');
-  alist.innerHTML = (d.service_alerts || []).map(a =>
-    `<div class="alert-item"><span class="ah">${a.header||'(no header)'}</span>
-     <br>${a.cause||''} / ${a.effect||''}</div>`
-  ).join('') || '<div style="color:#888">None</div>';
+  // --- sidebar: trip updates ---
+  document.getElementById('thdr').textContent = feedHeader(d.trip_updates);
+  document.getElementById('tlist').innerHTML = tEnts.map(ent => {
+    const tu = ent.trip_update || {};
+    const stus = tu.stop_time_update || [];
+    const nxt = nextStops(tu, 1)[0];
+    const dl = fmtDelay(stuDelay(nxt));
+    const nextStr = nxt
+      ? `next=${esc(nxt.stop_id || '?')} @ ${fmtTime(stuTime(nxt))}
+         <span class="${dl.cls}">${dl.text}</span>`
+      : '<span class="dim">no stops</span>';
+    const summary = `<span class="label">${esc((tu.trip && tu.trip.trip_id)
+      || ent.id)}</span>
+      <span class="dim">veh=</span>${esc((tu.vehicle && tu.vehicle.id) || '-')}
+      ${stus.length} stop${stus.length === 1 ? '' : 's'}<br>${nextStr}`;
+    return entityBlock('t' + ((tu.trip && tu.trip.trip_id) || ent.id), summary, ent);
+  }).join('') || '<div class="none">None</div>';
 
-  // status bar
-  const nv = (d.vehicles||[]).length;
-  const na = (d.service_alerts||[]).length;
+  // --- sidebar: service alerts ---
+  document.getElementById('ahdr').textContent = feedHeader(d.service_alerts);
+  document.getElementById('alist').innerHTML = aEnts.map(ent => {
+    const a = ent.alert || {};
+    const tr = f => (a[f] && a[f].translation && a[f].translation[0])
+      ? a[f].translation[0].text : '';
+    const activeWindow = (a.active_period || []).map(p =>
+      `${p.start ? fmtTime(p.start) : '*'} → ${p.end ? fmtTime(p.end) : '*'}`
+    ).join('; ') || 'always';
+    const desc = tr('description_text');
+    const url = tr('url');
+    const ies = (a.informed_entity || []).map(ie => {
+      const parts = [];
+      if (ie.agency_id) parts.push('agency=' + ie.agency_id);
+      if (ie.route_id) parts.push('route=' + ie.route_id);
+      if (ie.route_type !== undefined) parts.push('route_type=' + ie.route_type);
+      if (ie.direction_id !== undefined) parts.push('dir=' + ie.direction_id);
+      if (ie.stop_id) parts.push('stop=' + ie.stop_id);
+      if (ie.trip && ie.trip.trip_id) parts.push('trip=' + ie.trip.trip_id);
+      if (ie.trip && ie.trip.start_date) parts.push('date=' + ie.trip.start_date);
+      if (ie.trip && ie.trip.start_time) parts.push('time=' + ie.trip.start_time);
+      return esc(parts.join(', ') || '(all)');
+    }).join('<br>');
+    const summary = `<span class="ah">${esc(tr('header_text')
+      || '(no header)')}</span><br>
+      ${esc(a.cause || 'UNKNOWN_CAUSE')} / ${esc(a.effect || 'UNKNOWN_EFFECT')}
+      / ${esc(a.severity_level || 'UNKNOWN_SEVERITY')}<br>
+      <span class="dim">active:</span> ${esc(activeWindow)}
+      ${desc ? '<br>' + esc(desc) : ''}
+      ${url ? `<br><a href="${esc(url)}" target="_blank">${esc(url)}</a>` : ''}
+      ${ies ? '<br><span class="dim">informed:</span><br>' + ies : ''}`;
+    return entityBlock('a' + (tr('header_text') || ent.id), summary, ent);
+  }).join('') || '<div class="none">None</div>';
+
+  restoreOpen(wasOpen);
+
   document.getElementById('statusbar').textContent =
-    `Updated ${timeStr} · ${nv} vehicle${nv!==1?'s':''} · ${na} alert${na!==1?'s':''}`;
+    `Updated ${timeStr} · ${vEnts.length} vehicle${vEnts.length!==1?'s':''}`
+    + ` · ${tEnts.length} trip update${tEnts.length!==1?'s':''}`
+    + ` · ${aEnts.length} alert${aEnts.length!==1?'s':''}`;
 };
 evtSource.onerror = function() {
   document.getElementById('statusbar').textContent = 'Connection lost — reconnecting…';
@@ -539,85 +753,17 @@ _client_queues_lock = threading.Lock()
 
 
 def push_to_map(data: dict) -> None:
-    def _veh(msg):
-        out = []
+    def _dump(msg):
+        """Whole FeedMessage as JSON — nothing hand-picked, nothing dropped."""
         if msg is None:
-            return out
-        for e in msg.entity:
-            if not e.HasField("vehicle"):
-                continue
-            v = e.vehicle
-            out.append(
-                {
-                    "id": v.vehicle.id,
-                    "label": v.vehicle.label,
-                    "lat": v.position.latitude,
-                    "lon": v.position.longitude,
-                    "bearing": v.position.bearing,
-                    "speed": v.position.speed,
-                    "trip_id": v.trip.trip_id,
-                    "route_id": v.trip.route_id,
-                    "status": VEHICLE_STATUS.get(
-                        v.current_status, str(v.current_status)
-                    ),
-                }
-            )
-        return out
-
-    def _tu(msg):
-        out = []
-        if msg is None:
-            return out
-        for e in msg.entity:
-            if not e.HasField("trip_update"):
-                continue
-            tu = e.trip_update
-            next_stop = tu.stop_time_update[0].stop_id if tu.stop_time_update else None
-            delay = None
-            if tu.stop_time_update:
-                stu = tu.stop_time_update[0]
-                if stu.HasField("arrival"):
-                    delay = stu.arrival.delay
-                elif stu.HasField("departure"):
-                    delay = stu.departure.delay
-            out.append(
-                {
-                    "trip_id": tu.trip.trip_id,
-                    "route_id": tu.trip.route_id,
-                    "vehicle_id": tu.vehicle.id if tu.HasField("vehicle") else None,
-                    "stop_count": len(tu.stop_time_update),
-                    "next_stop": next_stop,
-                    "delay": delay,
-                }
-            )
-        return out
-
-    def _sa(msg):
-        out = []
-        if msg is None:
-            return out
-        for e in msg.entity:
-            if not e.HasField("alert"):
-                continue
-            a = e.alert
-            header = (
-                a.header_text.translation[0].text if a.header_text.translation else ""
-            )
-            out.append(
-                {
-                    "header": header,
-                    "cause": CAUSE_NAMES.get(a.cause, str(a.cause)),
-                    "effect": EFFECT_NAMES.get(a.effect, str(a.effect)),
-                    "active_window": _fmt_window(a),
-                }
-            )
-        return out
+            return {"header": None, "entity": []}
+        return json_format.MessageToDict(msg, preserving_proto_field_name=True)
 
     payload = json.dumps(
         {
-            "vehicles": _veh(data["vehicles"]),
-            "trip_updates": _tu(data["trip_updates"]),
-            "service_alerts": _sa(data["service_alerts"]),
+            "vehicles": _dump(data["vehicles"]),
+            "trip_updates": _dump(data["trip_updates"]),
+            "service_alerts": _dump(data["service_alerts"]),
             "timestamp": datetime.now(tz=UTC).isoformat(),
         }
     )

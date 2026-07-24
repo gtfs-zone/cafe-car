@@ -42,8 +42,8 @@ class StopTimeUpdateIngest(BaseModel):
     # Identify the stop by id or sequence (at least one; GTFS-RT accepts either).
     stop_id: str | None = None
     stop_sequence: int | None = None
-    # Absolute epoch time or a delay in seconds, per event. Absolute wins when
-    # both are present (see gtfs_rt.py::trip_updates).
+    # Absolute epoch time and/or a delay in seconds, per event. Both are emitted
+    # when both are present (see gtfs_rt.py::_fill_stop_time_update).
     arrival_time: int | None = None
     arrival_delay: int | None = None
     departure_time: int | None = None
