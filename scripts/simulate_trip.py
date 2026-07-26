@@ -36,12 +36,22 @@ Usage:
     uv run scripts/simulate_trip.py --all-trips --speed 50 --quiet
 
     # Custom tracker, ingest endpoint, speed and interval:
-    uv run scripts/simulate_trip.py --tracker bob \\
+    uv run scripts/simulate_trip.py --tracker <tracker-id> \\
         --ingest-url http://localhost:8000 --token dev-ingest-token \\
         --trip ELLSWB --speed 30 --interval 1
 
     # Custom delay range (seconds):
     uv run scripts/simulate_trip.py --min-delay 30 --max-delay 300 --delay-drift 10
+
+    # Device mode — emulate the Traccar Client app (posts fixes to :5055). The
+    # trip is resolved server-side from the tracker's rules, so no trip_id is
+    # sent; --trip only selects which shape to drive along. Requires a provisioned
+    # Traccar device whose uniqueId == <tracker-id>.
+    uv run scripts/simulate_trip.py --mode device --tracker <tracker-id> \\
+        --trip WCCWB --speed 30 --real-time
+
+Note: --tracker must equal a provisioned Tracker.id (see scripts/provision_source.py).
+The default "bob" writes to a Redis key no feed scans and will not surface.
 """
 
 import argparse
@@ -56,6 +66,10 @@ import zipfile
 import zoneinfo
 
 import httpx
+
+# The Traccar Client app carries speed in knots; vehicle-poser converts it back to
+# m/s with this same factor. Used only by --mode device.
+KNOTS_TO_MS = 0.514444
 
 # ---------------------------------------------------------------------------
 # GTFS loading
@@ -242,11 +256,30 @@ def main() -> int:
         action="store_true",
         help="Simulate every trip in the GTFS zip",
     )
-    parser.add_argument("--tracker", default="bob", help="Tracker id / vehicle_id (default: bob)")
+    parser.add_argument(
+        "--tracker",
+        default="bob",
+        help="Tracker id — must equal a provisioned Tracker.id (default: bob, which "
+        "won't surface in any feed). In device mode it is also the Traccar device "
+        "uniqueId, so the device must exist (see scripts/provision_source.py).",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("ingest", "device"),
+        default="ingest",
+        help="ingest: POST explicit trip_id to cafe-car /ingest (default). "
+        "device: emulate the Traccar Client app by posting fixes to Traccar :5055; "
+        "the trip is resolved server-side from the tracker's rules (no --trip sent).",
+    )
     parser.add_argument(
         "--ingest-url",
         default="http://localhost:8000",
         help="cafe-car base URL for the ingest API (default: http://localhost:8000)",
+    )
+    parser.add_argument(
+        "--traccar-url",
+        default="http://localhost:5055",
+        help="Traccar Client endpoint for --mode device (default: http://localhost:5055)",
     )
     parser.add_argument(
         "--token",
@@ -370,6 +403,12 @@ def main() -> int:
         print("Error: --override-trip-id can only be used with a single --trip.")
         return 1
 
+    if args.override_trip_id and args.mode == "device":
+        # In device mode the trip is resolved server-side from the tracker's rules;
+        # there is no client-supplied trip_id to override.
+        print("Error: --override-trip-id is ingest-only, not valid in device mode.")
+        return 1
+
     threads = []
     for tid in sorted(trip_ids):
         t = threading.Thread(target=run_trip, args=(tid, gtfs, args), daemon=True)
@@ -423,13 +462,19 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
     print(f"{prefix} Duration:   {trip_duration // 60:.0f} min  ({trip_duration}s scheduled)")
     print(f"{prefix} Delay:      {args.min_delay:.0f}–{args.max_delay:.0f}s (random walk, drift ±{args.delay_drift:.0f}s/tick, starting {delay_seconds:.0f}s)")
     print(f"{prefix} Speed:      {args.speed}x  →  real runtime ≈ {trip_duration / args.speed / 60:.1f} min")
-    print(f"{prefix} Ingest:     {args.ingest_url}/ingest/position  vehicle_id={args.tracker}  trip_id={published_trip_id}")
+    if args.mode == "device":
+        print(f"{prefix} Device:     {args.traccar_url}?id={args.tracker}  (trip resolved server-side from rules)")
+    else:
+        print(f"{prefix} Ingest:     {args.ingest_url}/ingest/position  vehicle_id={args.tracker}  trip_id={published_trip_id}")
     print()
 
     position_url = f"{args.ingest_url.rstrip('/')}/ingest/position"
     trip_update_url = f"{args.ingest_url.rstrip('/')}/ingest/trip-update"
-    headers = {"Authorization": f"Bearer {args.token}"}
-    client = httpx.Client(headers=headers, timeout=10.0)
+    if args.mode == "device":
+        client = httpx.Client(timeout=10.0)
+    else:
+        headers = {"Authorization": f"Bearer {args.token}"}
+        client = httpx.Client(headers=headers, timeout=10.0)
 
     print(f"{prefix} Starting simulation (Ctrl-C to stop).\n")
 
@@ -496,8 +541,26 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
             }
 
             try:
-                client.post(position_url, json=body).raise_for_status()
-                client.post(trip_update_url, json=trip_update_body).raise_for_status()
+                if args.mode == "device":
+                    # Emulate the Traccar Client app: one location fix to :5055.
+                    # No trip_id — vehicle-poser resolves it from the tracker's
+                    # rules. Speed is carried in knots (the app's wire unit).
+                    client.post(
+                        args.traccar_url,
+                        params={
+                            "id": args.tracker,
+                            "lat": round(lat, 6),
+                            "lon": round(lon, 6),
+                            "bearing": round(hdg, 1),
+                            "speed": round(speed_ms / KNOTS_TO_MS, 4),
+                            "timestamp": tst,
+                        },
+                    ).raise_for_status()
+                else:
+                    client.post(position_url, json=body).raise_for_status()
+                    client.post(
+                        trip_update_url, json=trip_update_body
+                    ).raise_for_status()
                 status = "✓"
             except httpx.HTTPError as exc:
                 status = f"ERR({exc})"
