@@ -9,7 +9,7 @@ from markupsafe import Markup
 from railroad_club.models.feed import Feed
 from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
-from railroad_club.models.tracker import Tracker
+from railroad_club.models.tracker import Tracker, generate_tracker_id
 from railroad_club.models.tracker_rule import TrackerRule
 from railroad_club.models.user import User
 from sqladmin import ModelView
@@ -221,13 +221,20 @@ class TrackerAdmin(ModelView, model=Tracker):
         ),
     }
     column_searchable_list: ClassVar[list] = [Tracker.nickname]
-    # ``id`` is auto-generated (a secret pet-name); never edited by hand.
-    form_excluded_columns: ClassVar[list] = ["feed", "id", "rules"]
+    # ``id`` is a secret pet-name, prefilled with a random default and editable
+    # at creation time only; it is never editable after creation (it's baked
+    # into the Traccar device, tracker_rule FK, and Redis keys).
+    form_include_pk: ClassVar[bool] = True
+    form_excluded_columns: ClassVar[list] = ["feed", "rules"]
+    form_create_rules: ClassVar[list] = ["id", "nickname", "feed_id"]
+    form_edit_rules: ClassVar[list] = ["nickname", "feed_id"]
     name = "Tracker"
     name_plural = "Trackers"
 
     async def scaffold_form(self, rules: list | None = None) -> type:
         Form = await super().scaffold_form(rules)
+        if rules is not None and "id" not in rules and hasattr(Form, "id"):
+            delattr(Form, "id")
         subject = current_subject_var.get()
         async with self.session_maker() as session:
             result = await session.execute(
@@ -285,6 +292,8 @@ class TrackerAdmin(ModelView, model=Tracker):
         )
         if result.scalar_one_or_none() is None:
             raise PermissionError("Feed not found or access denied")
+        tracker_id = (data.get("id") or "").strip()
+        data["id"] = tracker_id or generate_tracker_id()
         return await super().insert_model(request, data)
 
     async def _get_owned_tracker(self, request: Request, pk: str | int) -> Tracker:
@@ -302,6 +311,9 @@ class TrackerAdmin(ModelView, model=Tracker):
         self, request: Request, pk: str | int, data: dict
     ) -> Tracker:
         await self._get_owned_tracker(request, pk)
+        # ``id`` is immutable after creation; never let a crafted POST change it
+        # (it's the Traccar uniqueId / Redis key / tracker_rule FK target).
+        data.pop("id", None)
         return await super().update_model(request, pk, data)
 
     async def delete_model(self, request: Request, pk: str | int) -> None:
