@@ -11,3 +11,6 @@ __pycache__/
 dist/
 *.egg-info/
 
+
+# MCP browser-automation scratch output
+.playwright-mcp/
