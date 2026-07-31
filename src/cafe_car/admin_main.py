@@ -5,9 +5,11 @@ from pathlib import Path
 import redis.asyncio as aioredis
 from fastapi import FastAPI, Request
 from sqladmin import Admin
+from starlette.datastructures import MutableHeaders
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from cafe_car.admin.auth import OIDCAuthBackend
 from cafe_car.admin.context import current_subject_var
@@ -22,11 +24,42 @@ from cafe_car.admin.views import (
 from cafe_car.database import get_engine, get_session_factory
 from cafe_car.settings import get_settings
 
+# SQLAdmin's static assets (vendored Tabler/Bootstrap CSS+JS). These are
+# public, immutable-per-deploy files: skip session/DB middleware for them and
+# make them cacheable so browsers don't refetch every stylesheet on each page
+# load (Starlette's StaticFiles sends no Cache-Control, which causes a flash
+# of unstyled content when the assets are slow).
+STATICS_PREFIX = "/statics/"
+
+STATICS_MAX_AGE = 60 * 60 * 24  # 1 day; ETag revalidation still applies after
+
+
+class StaticsCacheControlMiddleware:
+    """Pure-ASGI middleware that adds Cache-Control to /statics responses."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not scope["path"].startswith(STATICS_PREFIX):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_cache_control(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers["Cache-Control"] = f"public, max-age={STATICS_MAX_AGE}"
+            await send(message)
+
+        await self.app(scope, receive, send_with_cache_control)
+
 
 class DBSessionMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
+        if request.url.path.startswith(STATICS_PREFIX):
+            return await call_next(request)
         async with get_session_factory()() as session:
             request.state.session = session
             return await call_next(request)
@@ -36,6 +69,8 @@ class SubjectMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
+        if request.url.path.startswith(STATICS_PREFIX):
+            return await call_next(request)
         current_subject_var.set(request.session.get("subject", ""))
         return await call_next(request)
 
@@ -61,6 +96,7 @@ def create_admin_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    app.add_middleware(StaticsCacheControlMiddleware)
     app.add_middleware(DBSessionMiddleware)
     app.add_middleware(SubjectMiddleware)
     app.add_middleware(SessionMiddleware, secret_key=settings.session_secret_key)
