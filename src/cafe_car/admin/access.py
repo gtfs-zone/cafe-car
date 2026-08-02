@@ -11,7 +11,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from railroad_club.models.feed import Feed
-from sqlalchemy import select
+from railroad_club.models.feed_member import FeedMember
+from sqlalchemy import or_, select
 
 if TYPE_CHECKING:
     from sqlalchemy import Select
@@ -22,9 +23,17 @@ def owned_feed_ids(user_id: int) -> Select[tuple[int]]:
     return select(Feed.id).where(Feed.owner_id == user_id)
 
 
-def accessible_feed_ids(user_id: int) -> Select[tuple[int]]:
-    """Feeds this user may read and edit.
+def member_feed_ids(user_id: int) -> Select[tuple[int]]:
+    """Feeds shared with this user by someone else."""
+    return select(FeedMember.feed_id).where(FeedMember.user_id == user_id)
 
-    Currently owner-only. Membership joins in at Phase 4.
+
+def accessible_feed_ids(user_id: int) -> Select[tuple[int]]:
+    """Feeds this user may read and edit: owned or shared with them.
+
+    Trackers, tracker rules, alerts and informed entities all scope through
+    their feed, so they inherit sharing from this one definition.
     """
-    return select(Feed.id).where(Feed.owner_id == user_id)
+    return select(Feed.id).where(
+        or_(Feed.owner_id == user_id, Feed.id.in_(member_feed_ids(user_id)))
+    )

@@ -7,6 +7,7 @@ from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
 from cafe_car.accounts import resolve_login
+from cafe_car.admin.context import current_user_id_var
 from cafe_car.database import get_session_factory
 from cafe_car.settings import get_settings
 
@@ -85,6 +86,13 @@ class OIDCAuthBackend(AuthenticationBackend):
             logger.exception("authenticate: DB error for subject=%s", subject)
             raise
         request.session.clear()
+        # Authoritative for this request. SubjectMiddleware primes the var from
+        # the session before we get here, which is a request behind: on the
+        # first request of a session it is still 0, and on a browser that
+        # switches users it still holds the *previous* user — which would feed
+        # their feed list into scaffold_form's dropdown. Overwrite it now that
+        # the identity is actually known.
+        current_user_id_var.set(user.id)
         # user_id is what every scoped query filters on. `subject` is kept for
         # display and debugging only — nothing authorises against it any more.
         request.session["user_id"] = user.id

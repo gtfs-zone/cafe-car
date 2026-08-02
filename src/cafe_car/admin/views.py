@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from starlette.requests import Request
 
-from cafe_car.admin.access import accessible_feed_ids
+from cafe_car.admin.access import accessible_feed_ids, owned_feed_ids
 from cafe_car.admin.context import current_user_id_var
 from cafe_car.admin.links import viz_url
 
@@ -103,12 +103,14 @@ class FeedAdmin(ModelView, model=Feed):
     column_list: ClassVar[list] = [
         Feed.feed_name,
         Feed.static_feed_url,
+        "access_badge",
         "load_status_badge",
         "last_loaded_at",
         "viz_link",
         "reload_action",
     ]
     column_labels: ClassVar[dict] = {
+        "access_badge": "Access",
         "load_status_badge": "Status",
         "last_loaded_at": "Last Loaded",
         "viz_link": "",
@@ -117,6 +119,12 @@ class FeedAdmin(ModelView, model=Feed):
     column_formatters: ClassVar[dict] = {
         Feed.feed_name: (
             lambda m, a: Markup(f'<a href="/feed/edit/{m.id}">{m.feed_name}</a>')
+        ),
+        # Formatters get no request, so read the per-request ContextVar.
+        "access_badge": lambda m, a: Markup(
+            '<span style="color:#22c55e;font-weight:bold">owner</span>'
+            if m.owner_id == current_user_id_var.get()
+            else '<span style="color:#3b82f6">shared with me</span>'
         ),
         "load_status_badge": lambda m, a: Markup(
             _STATUS_BADGE.get(
@@ -147,6 +155,10 @@ class FeedAdmin(ModelView, model=Feed):
         "owner_id",
         "gtfs_static_feed",
         "aliases",
+        # Membership is managed through its own owner-checked routes, never a
+        # form widget. Leaving it in also makes WTForms touch the relationship
+        # on a detached instance, which raises DetachedInstanceError.
+        "members",
     ]
     name = "Feed"
     name_plural = "Feeds"
@@ -181,7 +193,8 @@ class FeedAdmin(ModelView, model=Feed):
         data["owner_id"] = user_id
         return await super().insert_model(request, data)
 
-    async def _get_owned_feed(self, request: Request, pk: str | int) -> Feed:
+    async def _get_accessible_feed(self, request: Request, pk: str | int) -> Feed:
+        """A feed the caller owns or is a member of."""
         user_id = _current_user_id(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
@@ -192,8 +205,26 @@ class FeedAdmin(ModelView, model=Feed):
             raise PermissionError("Feed not found or access denied")
         return feed
 
+    async def _get_owned_feed(self, request: Request, pk: str | int) -> Feed:
+        """A feed the caller *owns*. Members are refused."""
+        user_id = _current_user_id(request)
+        session: AsyncSession = request.state.session
+        result = await session.execute(
+            select(Feed)
+            .where(Feed.id.in_(owned_feed_ids(user_id)))
+            .where(Feed.id == int(pk))
+        )
+        feed = result.scalar_one_or_none()
+        if feed is None:
+            raise PermissionError("Only the owner of this feed can do that")
+        return feed
+
     async def update_model(self, request: Request, pk: str | int, data: dict) -> Feed:
-        await self._get_owned_feed(request, pk)
+        # Members may edit a feed's contents...
+        await self._get_accessible_feed(request, pk)
+        # ...but ownership is never settable from a form. Dropping the key
+        # here — not merely hiding the field — is what stops a crafted POST.
+        data.pop("owner_id", None)
         return await super().update_model(request, pk, data)
 
     async def delete_model(self, request: Request, pk: str | int) -> None:
