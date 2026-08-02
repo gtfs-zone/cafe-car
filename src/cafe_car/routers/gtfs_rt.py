@@ -132,9 +132,7 @@ def _fill_stop_time_update(stu: object, update: dict) -> None:
     if update.get("departure_delay") is not None:
         stu.departure.delay = update["departure_delay"]
     sr = update.get("schedule_relationship")
-    stu.schedule_relationship = (
-        _SR_ENUM.Value(sr) if sr else _SR_ENUM.SCHEDULED
-    )
+    stu.schedule_relationship = _SR_ENUM.Value(sr) if sr else _SR_ENUM.SCHEDULED
 
 
 @router.get("/{feed_name}/vehicle_positions.pb")
@@ -205,9 +203,27 @@ async def vehicle_positions(
                     entity.vehicle.trip.start_date = start_date
                 if route_id := data.get("route_id"):
                     entity.vehicle.trip.route_id = route_id
-            entity.vehicle.current_status = (
-                gtfs_realtime_pb2.VehiclePosition.IN_TRANSIT_TO
-            )
+            # Where the vehicle is along its trip. current_status names the stop
+            # in current_stop_sequence/stop_id, so all three are emitted together
+            # or not at all — this used to hardcode IN_TRANSIT_TO with no stop
+            # reference, which says nothing and left consumers unable to place
+            # the vehicle against the schedule. A producer that reports no
+            # current stop leaves the fields absent: current_status is a proto2
+            # field defaulting to IN_TRANSIT_TO, so absent on the wire is the
+            # honest "not reported" a presence-checking consumer can see.
+            current_stop_sequence = data.get("current_stop_sequence")
+            stop_id = data.get("stop_id")
+            if current_stop_sequence is not None or stop_id:
+                if current_stop_sequence is not None:
+                    entity.vehicle.current_stop_sequence = current_stop_sequence
+                if stop_id:
+                    entity.vehicle.stop_id = stop_id
+                if status := data.get("current_status"):
+                    entity.vehicle.current_status = (
+                        gtfs_realtime_pb2.VehiclePosition.VehicleStopStatus.Value(
+                            status
+                        )
+                    )
             entity.vehicle.timestamp = data["timestamp"]
 
     return Response(content=msg.SerializeToString(), media_type=PROTOBUF_CONTENT_TYPE)
@@ -231,7 +247,8 @@ async def service_alerts(
         return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
     active_alerts = [
-        a for a in all_alerts
+        a
+        for a in all_alerts
         if (a.active_period_start is None or _utc(a.active_period_start) <= now)
         and (a.active_period_end is None or _utc(a.active_period_end) > now)
     ]

@@ -11,13 +11,19 @@ from __future__ import annotations
 
 import json
 import secrets
+from typing import Literal
 
 from fastapi import APIRouter, Header, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from cafe_car.settings import get_settings
 
 router = APIRouter()
+
+# GTFS-RT VehicleStopStatus, by name. Every one of them names a stop — the
+# vehicle is approaching, sitting at, or heading to *that* stop — so a status is
+# only meaningful alongside a stop reference (see PositionIngest below).
+VehicleStopStatus = Literal["INCOMING_AT", "STOPPED_AT", "IN_TRANSIT_TO"]
 
 # Must match the vehicle-poser shim's TTL — cafe-car serves whatever is live.
 POSITION_TTL = 60
@@ -49,6 +55,28 @@ class PositionIngest(BaseModel):
     # has several instances of the same trip_id en route at once; start_date is
     # what tells them apart — without it they collide on one Redis key.
     start_date: str | None = None
+    # Where the vehicle is *now*, along its trip. Without this a consumer can
+    # draw the vehicle on a map but cannot place it against the schedule, so a
+    # producer that knows its current stop should always send it.
+    #
+    # `current_status` describes the vehicle's relationship to the stop named by
+    # `current_stop_sequence`/`stop_id`, so it is only accepted together with
+    # one of them — a bare status names nothing. All three absent is fine: it
+    # means "not reported", which is what the feed will then say.
+    current_stop_sequence: int | None = None
+    stop_id: str | None = None
+    current_status: VehicleStopStatus | None = None
+
+    @model_validator(mode="after")
+    def _status_needs_a_stop(self) -> PositionIngest:
+        if self.current_status is not None and (
+            self.current_stop_sequence is None and self.stop_id is None
+        ):
+            raise ValueError(
+                "current_status requires current_stop_sequence or stop_id — "
+                "the status describes the vehicle's relationship to that stop"
+            )
+        return self
 
 
 class StopTimeUpdateIngest(BaseModel):
@@ -110,7 +138,9 @@ async def ingest_position(
 
     # Byte-for-byte the record the vehicle-poser shim writes; keys read by
     # gtfs_rt.py::vehicle_positions (tracker_id, trip_id, lat, lon, bearing,
-    # speed, timestamp, optional route_id, optional public vehicle_id/label).
+    # speed, timestamp, optional route_id, optional public vehicle_id/label,
+    # optional current_stop_sequence/stop_id/current_status). Producers that
+    # predate a key simply omit it — the serialiser reads with .get().
     record: dict[str, object] = {
         "tracker_id": body.tracker_id,
         "trip_id": body.trip_id,
@@ -128,6 +158,13 @@ async def ingest_position(
         record["vehicle_id"] = body.vehicle_id
     if body.vehicle_label:
         record["vehicle_label"] = body.vehicle_label
+    # Sequence 0 is a legitimate GTFS stop_sequence, so test presence, not truth.
+    if body.current_stop_sequence is not None:
+        record["current_stop_sequence"] = body.current_stop_sequence
+    if body.stop_id:
+        record["stop_id"] = body.stop_id
+    if body.current_status:
+        record["current_status"] = body.current_status
 
     key = _vehicle_key(body.tracker_id, body.trip_id, body.start_date)
     await request.app.state.redis.setex(key, POSITION_TTL, json.dumps(record))
