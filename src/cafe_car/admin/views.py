@@ -210,7 +210,7 @@ class FeedAdmin(ModelView, model=Feed):
         with contextlib.suppress(Exception):
             from cafe_car.celery_client import celery_app
 
-            celery_app.send_task("worker.tasks.load_feed", args=[model.id])
+            celery_app.send_task("schedule_foamer.tasks.load_feed", args=[model.id])
 
 
 class TrackerAdmin(ModelView, model=Tracker):

@@ -196,7 +196,7 @@ async def reload_feed(request: Request, feed_id: int) -> RedirectResponse:
     try:
         from cafe_car.celery_client import celery_app
 
-        celery_app.send_task("worker.tasks.load_feed", args=[feed_id])
+        celery_app.send_task("schedule_foamer.tasks.load_feed", args=[feed_id])
     except Exception:
         pass  # worker unavailable
     return RedirectResponse(url="/feed/list", status_code=303)
