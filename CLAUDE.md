@@ -117,7 +117,7 @@ curl -H "X-Auth-Request-User: alice" -H "X-Auth-Request-Email: alice@example.com
 ## Rules
 
 - Never include `Co-Authored-By: Claude ...` trailers in commit messages.
-- Only read files within this repo's directory. Do not access parent directories or sibling repos.
+- Do not use Playwright / the browser automation tools. The user tests UI changes manually.
 - Never create a stop_time with null departure and arrival
 - Admin views must always scope queries to the authenticated user — never expose another user's Feeds or Trackers
 - Use `uv` for all package management (never `pip install` directly)

@@ -62,7 +62,14 @@ Gotchas: file-backed static sources have no URL → keep hidden (same rule as
 `isReproducible`).
 
 ## Phase 3 — local testing + deploy sanity
-- [ ] Local: run cafe-car admin + test-track; confirm links open prod frontends.
-- [ ] Note: local feeds won't exist in prod viz (expected trade-off).
-- [ ] Deploy: none required (hardcoded prod URLs). Future option: add
-      `viz.rt.gtfs.zone` to `cors_allowed_origins` to drop `cors=r`.
+- [x] Verified cafe-car: `uv run ruff check src/` passes, admin app constructs,
+      `feed_detail.html` compiles in the Jinja env, URL builders produce the
+      expected scheme.
+- [x] Verified test-track: `pnpm typecheck` + `pnpm build` pass; `#edit-feed-btn`
+      exists, starts hidden, and gets the correct `edit.gtfs.zone/#load=<url>` href
+      when a URL-backed static feed is active.
+- [ ] User runs the full stack via music-student to click through the links.
+- Note: local feeds won't exist in prod viz/editor (expected trade-off of
+  hardcoding prod URLs).
+- Deploy: none required (hardcoded prod URLs). Future option: add
+  `viz.rt.gtfs.zone` to `cors_allowed_origins` to drop `cors=r`.
