@@ -11,7 +11,6 @@ from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
 from railroad_club.models.tracker import Tracker, generate_tracker_id
 from railroad_club.models.tracker_rule import TrackerRule
-from railroad_club.models.user import User
 from sqladmin import ModelView
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import selectinload
@@ -22,7 +21,8 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from starlette.requests import Request
 
-from cafe_car.admin.context import current_subject_var
+from cafe_car.admin.access import accessible_feed_ids
+from cafe_car.admin.context import current_user_id_var
 from cafe_car.admin.links import viz_url
 
 _STATUS_BADGE = {
@@ -79,8 +79,9 @@ def _fmt_utc_dt(val: datetime | None) -> Markup:
     return Markup(f'<time data-utc="{iso}">{iso}</time>')
 
 
-def _current_subject(request: Request) -> str:
-    return request.session.get("subject", "")
+def _current_user_id(request: Request) -> int:
+    """0 when unauthenticated, which every access subquery matches nothing for."""
+    return int(request.session.get("user_id") or 0)
 
 
 class FeedAdmin(ModelView, model=Feed):
@@ -140,56 +141,51 @@ class FeedAdmin(ModelView, model=Feed):
     }
     column_searchable_list: ClassVar[list] = [Feed.feed_name]
     form_excluded_columns: ClassVar[list] = [
-        "owner", "trackers", "alerts", "owner_id", "gtfs_static_feed", "aliases"
+        "owner",
+        "trackers",
+        "alerts",
+        "owner_id",
+        "gtfs_static_feed",
+        "aliases",
     ]
     name = "Feed"
     name_plural = "Feeds"
 
-    def _base_query(self, subject: str) -> Select[tuple[Feed]]:
-        return (
-            select(Feed)
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
-        )
+    def _base_query(self, user_id: int) -> Select[tuple[Feed]]:
+        return select(Feed).where(Feed.id.in_(accessible_feed_ids(user_id)))
 
     def list_query(self, request: Request) -> Select[tuple[Feed]]:
-        return self._base_query(_current_subject(request)).options(
+        return self._base_query(_current_user_id(request)).options(
             selectinload(Feed.gtfs_static_feed)
         )
 
     def count_query(self, request: Request) -> Select[tuple[int]]:
-        subject = _current_subject(request)
-        return (
-            select(func.count(Feed.id))
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
+        user_id = _current_user_id(request)
+        return select(func.count(Feed.id)).where(
+            Feed.id.in_(accessible_feed_ids(user_id))
         )
 
     def details_query(self, request: Request) -> Select[tuple[Feed]]:
         pk = request.path_params["pk"]
-        return self._base_query(_current_subject(request)).where(Feed.id == int(pk))
+        return self._base_query(_current_user_id(request)).where(Feed.id == int(pk))
 
     def form_edit_query(self, request: Request) -> Select[tuple[Feed]]:
         pk = request.path_params["pk"]
-        return self._base_query(_current_subject(request)).where(Feed.id == int(pk))
+        return self._base_query(_current_user_id(request)).where(Feed.id == int(pk))
 
     async def insert_model(self, request: Request, data: dict) -> Feed:
-        subject = _current_subject(request)
-        session: AsyncSession = request.state.session
-        result = await session.execute(
-            select(User).where(User.provider_subject == subject)
-        )
-        owner = result.scalar_one_or_none()
-        if owner is None:
-            raise ValueError("Authenticated user not found in database")
-        data["owner_id"] = owner.id
+        user_id = _current_user_id(request)
+        if not user_id:
+            raise PermissionError("Not authenticated")
+        # The creator owns it. Ownership is never taken from the form.
+        data["owner_id"] = user_id
         return await super().insert_model(request, data)
 
     async def _get_owned_feed(self, request: Request, pk: str | int) -> Feed:
-        subject = _current_subject(request)
+        user_id = _current_user_id(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
-            self._base_query(subject).where(Feed.id == int(pk))
+            self._base_query(user_id).where(Feed.id == int(pk))
         )
         feed = result.scalar_one_or_none()
         if feed is None:
@@ -243,12 +239,10 @@ class TrackerAdmin(ModelView, model=Tracker):
         Form = await super().scaffold_form(rules)
         if rules is not None and "id" not in rules and hasattr(Form, "id"):
             delattr(Form, "id")
-        subject = current_subject_var.get()
+        user_id = current_user_id_var.get()
         async with self.session_maker() as session:
             result = await session.execute(
-                select(Feed)
-                .join(User, Feed.owner_id == User.id)
-                .where(User.provider_subject == subject)
+                select(Feed).where(Feed.id.in_(accessible_feed_ids(user_id)))
             )
             feeds = result.scalars().all()
         Form.feed_id = SelectField(
@@ -258,44 +252,35 @@ class TrackerAdmin(ModelView, model=Tracker):
         )
         return Form
 
-    def _base_query(self, subject: str) -> Select[tuple[Tracker]]:
-        return (
-            select(Tracker)
-            .join(Feed, Tracker.feed_id == Feed.id)
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
-        )
+    def _base_query(self, user_id: int) -> Select[tuple[Tracker]]:
+        return select(Tracker).where(Tracker.feed_id.in_(accessible_feed_ids(user_id)))
 
     def list_query(self, request: Request) -> Select[tuple[Tracker]]:
-        return self._base_query(_current_subject(request))
+        return self._base_query(_current_user_id(request))
 
     def count_query(self, request: Request) -> Select[tuple[int]]:
-        subject = _current_subject(request)
-        return (
-            select(func.count(Tracker.id))
-            .join(Feed, Tracker.feed_id == Feed.id)
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
+        user_id = _current_user_id(request)
+        return select(func.count(Tracker.id)).where(
+            Tracker.feed_id.in_(accessible_feed_ids(user_id))
         )
 
     def details_query(self, request: Request) -> Select[tuple[Tracker]]:
         pk = request.path_params["pk"]
-        return self._base_query(_current_subject(request)).where(Tracker.id == pk)
+        return self._base_query(_current_user_id(request)).where(Tracker.id == pk)
 
     def form_edit_query(self, request: Request) -> Select[tuple[Tracker]]:
         pk = request.path_params["pk"]
-        return self._base_query(_current_subject(request)).where(Tracker.id == pk)
+        return self._base_query(_current_user_id(request)).where(Tracker.id == pk)
 
     async def insert_model(self, request: Request, data: dict) -> Tracker:
-        subject = _current_subject(request)
+        user_id = _current_user_id(request)
         session: AsyncSession = request.state.session
         feed_id = data.get("feed_id")
         if not feed_id:
             raise ValueError("A feed must be selected")
         result = await session.execute(
             select(Feed)
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
+            .where(Feed.id.in_(accessible_feed_ids(user_id)))
             .where(Feed.id == feed_id)
         )
         if result.scalar_one_or_none() is None:
@@ -305,10 +290,10 @@ class TrackerAdmin(ModelView, model=Tracker):
         return await super().insert_model(request, data)
 
     async def _get_owned_tracker(self, request: Request, pk: str | int) -> Tracker:
-        subject = _current_subject(request)
+        user_id = _current_user_id(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
-            self._base_query(subject).where(Tracker.id == pk)
+            self._base_query(user_id).where(Tracker.id == pk)
         )
         tracker = result.scalar_one_or_none()
         if tracker is None:
@@ -346,7 +331,6 @@ class TrackerAdmin(ModelView, model=Tracker):
                     model.id,
                     exc_info=True,
                 )
-
 
 
 _OPTIONAL_ALERT_FIELDS = ("cause", "effect", "severity_level", "url")
@@ -415,12 +399,10 @@ class ServiceAlertAdmin(ModelView, model=ServiceAlert):
 
     async def scaffold_form(self, rules: list | None = None) -> type:
         Form = await super().scaffold_form(rules)
-        subject = current_subject_var.get()
+        user_id = current_user_id_var.get()
         async with self.session_maker() as session:
             result = await session.execute(
-                select(Feed)
-                .join(User, Feed.owner_id == User.id)
-                .where(User.provider_subject == subject)
+                select(Feed).where(Feed.id.in_(accessible_feed_ids(user_id)))
             )
             feeds = result.scalars().all()
         Form.feed_id = SelectField(
@@ -430,48 +412,41 @@ class ServiceAlertAdmin(ModelView, model=ServiceAlert):
         )
         return Form
 
-    def _base_query(self, subject: str) -> Select[tuple[ServiceAlert]]:
-        return (
-            select(ServiceAlert)
-            .join(Feed, ServiceAlert.feed_id == Feed.id)
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
+    def _base_query(self, user_id: int) -> Select[tuple[ServiceAlert]]:
+        return select(ServiceAlert).where(
+            ServiceAlert.feed_id.in_(accessible_feed_ids(user_id))
         )
 
     def list_query(self, request: Request) -> Select[tuple[ServiceAlert]]:
-        return self._base_query(_current_subject(request)).options(
+        return self._base_query(_current_user_id(request)).options(
             selectinload(ServiceAlert.entities)
         )
 
     def count_query(self, request: Request) -> Select[tuple[int]]:
-        subject = _current_subject(request)
-        return (
-            select(func.count(ServiceAlert.id))
-            .join(Feed, ServiceAlert.feed_id == Feed.id)
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
+        user_id = _current_user_id(request)
+        return select(func.count(ServiceAlert.id)).where(
+            ServiceAlert.feed_id.in_(accessible_feed_ids(user_id))
         )
 
     def details_query(self, request: Request) -> Select[tuple[ServiceAlert]]:
         pk = request.path_params["pk"]
-        subject = _current_subject(request)
-        return self._base_query(subject).where(ServiceAlert.id == int(pk))
+        user_id = _current_user_id(request)
+        return self._base_query(user_id).where(ServiceAlert.id == int(pk))
 
     def form_edit_query(self, request: Request) -> Select[tuple[ServiceAlert]]:
         pk = request.path_params["pk"]
-        subject = _current_subject(request)
-        return self._base_query(subject).where(ServiceAlert.id == int(pk))
+        user_id = _current_user_id(request)
+        return self._base_query(user_id).where(ServiceAlert.id == int(pk))
 
     async def insert_model(self, request: Request, data: dict) -> ServiceAlert:
-        subject = _current_subject(request)
+        user_id = _current_user_id(request)
         session: AsyncSession = request.state.session
         feed_id = data.get("feed_id")
         if not feed_id:
             raise ValueError("A feed must be selected")
         result = await session.execute(
             select(Feed)
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
+            .where(Feed.id.in_(accessible_feed_ids(user_id)))
             .where(Feed.id == feed_id)
         )
         if result.scalar_one_or_none() is None:
@@ -480,13 +455,11 @@ class ServiceAlertAdmin(ModelView, model=ServiceAlert):
         _make_alert_datetimes_utc(data)
         return await super().insert_model(request, data)
 
-    async def _get_owned_alert(
-        self, request: Request, pk: str | int
-    ) -> ServiceAlert:
-        subject = _current_subject(request)
+    async def _get_owned_alert(self, request: Request, pk: str | int) -> ServiceAlert:
+        user_id = _current_user_id(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
-            self._base_query(subject).where(ServiceAlert.id == int(pk))
+            self._base_query(user_id).where(ServiceAlert.id == int(pk))
         )
         alert = result.scalar_one_or_none()
         if alert is None:
@@ -542,13 +515,12 @@ class InformedEntityAdmin(ModelView, model=InformedEntity):
 
     async def scaffold_form(self, rules: list | None = None) -> type:
         Form = await super().scaffold_form(rules)
-        subject = current_subject_var.get()
+        user_id = current_user_id_var.get()
         async with self.session_maker() as session:
             result = await session.execute(
-                select(ServiceAlert)
-                .join(Feed, ServiceAlert.feed_id == Feed.id)
-                .join(User, Feed.owner_id == User.id)
-                .where(User.provider_subject == subject)
+                select(ServiceAlert).where(
+                    ServiceAlert.feed_id.in_(accessible_feed_ids(user_id))
+                )
             )
             alerts = result.scalars().all()
         Form.service_alert_id = SelectField(
@@ -564,46 +536,40 @@ class InformedEntityAdmin(ModelView, model=InformedEntity):
         )
         return Form
 
-    def _base_query(self, subject: str) -> Select[tuple[InformedEntity]]:
+    def _base_query(self, user_id: int) -> Select[tuple[InformedEntity]]:
         return (
             select(InformedEntity)
             .join(ServiceAlert, InformedEntity.service_alert_id == ServiceAlert.id)
-            .join(Feed, ServiceAlert.feed_id == Feed.id)
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
+            .where(ServiceAlert.feed_id.in_(accessible_feed_ids(user_id)))
         )
 
     def list_query(self, request: Request) -> Select[tuple[InformedEntity]]:
-        return self._base_query(_current_subject(request))
+        return self._base_query(_current_user_id(request))
 
     def count_query(self, request: Request) -> Select[tuple[int]]:
-        subject = _current_subject(request)
+        user_id = _current_user_id(request)
         return (
             select(func.count(InformedEntity.id))
             .join(ServiceAlert, InformedEntity.service_alert_id == ServiceAlert.id)
-            .join(Feed, ServiceAlert.feed_id == Feed.id)
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
+            .where(ServiceAlert.feed_id.in_(accessible_feed_ids(user_id)))
         )
 
     def details_query(self, request: Request) -> Select[tuple[InformedEntity]]:
         pk = request.path_params["pk"]
-        subject = _current_subject(request)
-        return self._base_query(subject).where(InformedEntity.id == int(pk))
+        user_id = _current_user_id(request)
+        return self._base_query(user_id).where(InformedEntity.id == int(pk))
 
     def form_edit_query(self, request: Request) -> Select[tuple[InformedEntity]]:
         pk = request.path_params["pk"]
-        subject = _current_subject(request)
-        return self._base_query(subject).where(InformedEntity.id == int(pk))
+        user_id = _current_user_id(request)
+        return self._base_query(user_id).where(InformedEntity.id == int(pk))
 
     async def _check_alert_ownership(self, request: Request, alert_id: int) -> None:
-        subject = _current_subject(request)
+        user_id = _current_user_id(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
             select(ServiceAlert)
-            .join(Feed, ServiceAlert.feed_id == Feed.id)
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
+            .where(ServiceAlert.feed_id.in_(accessible_feed_ids(user_id)))
             .where(ServiceAlert.id == alert_id)
         )
         if result.scalar_one_or_none() is None:
@@ -619,10 +585,10 @@ class InformedEntityAdmin(ModelView, model=InformedEntity):
     async def _get_owned_entity(
         self, request: Request, pk: str | int
     ) -> InformedEntity:
-        subject = _current_subject(request)
+        user_id = _current_user_id(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
-            self._base_query(subject).where(InformedEntity.id == int(pk))
+            self._base_query(user_id).where(InformedEntity.id == int(pk))
         )
         entity = result.scalar_one_or_none()
         if entity is None:
@@ -664,13 +630,11 @@ class TrackerRuleAdmin(ModelView, model=TrackerRule):
 
     async def scaffold_form(self, rules: list | None = None) -> type:
         Form = await super().scaffold_form(rules)
-        subject = current_subject_var.get()
+        user_id = current_user_id_var.get()
         async with self.session_maker() as session:
             result = await session.execute(
                 select(Tracker)
-                .join(Feed, Tracker.feed_id == Feed.id)
-                .join(User, Feed.owner_id == User.id)
-                .where(User.provider_subject == subject)
+                .where(Tracker.feed_id.in_(accessible_feed_ids(user_id)))
                 .order_by(Tracker.nickname)
             )
             trackers = result.scalars().all()
@@ -681,64 +645,56 @@ class TrackerRuleAdmin(ModelView, model=TrackerRule):
         )
         return Form
 
-    def _base_query(self, subject: str) -> Select[tuple[TrackerRule]]:
+    def _base_query(self, user_id: int) -> Select[tuple[TrackerRule]]:
         return (
             select(TrackerRule)
             .join(Tracker, TrackerRule.tracker_id == Tracker.id)
-            .join(Feed, Tracker.feed_id == Feed.id)
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
+            .where(Tracker.feed_id.in_(accessible_feed_ids(user_id)))
         )
 
     def list_query(self, request: Request) -> Select[tuple[TrackerRule]]:
-        return self._base_query(_current_subject(request))
+        return self._base_query(_current_user_id(request))
 
     def count_query(self, request: Request) -> Select[tuple[int]]:
-        subject = _current_subject(request)
+        user_id = _current_user_id(request)
         return (
             select(func.count(TrackerRule.id))
             .join(Tracker, TrackerRule.tracker_id == Tracker.id)
-            .join(Feed, Tracker.feed_id == Feed.id)
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
+            .where(Tracker.feed_id.in_(accessible_feed_ids(user_id)))
         )
 
     def details_query(self, request: Request) -> Select[tuple[TrackerRule]]:
         pk = request.path_params["pk"]
-        return self._base_query(_current_subject(request)).where(
+        return self._base_query(_current_user_id(request)).where(
             TrackerRule.id == int(pk)
         )
 
     def form_edit_query(self, request: Request) -> Select[tuple[TrackerRule]]:
         pk = request.path_params["pk"]
-        return self._base_query(_current_subject(request)).where(
+        return self._base_query(_current_user_id(request)).where(
             TrackerRule.id == int(pk)
         )
 
     async def insert_model(self, request: Request, data: dict) -> TrackerRule:
-        subject = _current_subject(request)
+        user_id = _current_user_id(request)
         session: AsyncSession = request.state.session
         tracker_id = data.get("tracker_id")
         if not tracker_id:
             raise ValueError("A tracker must be selected")
         result = await session.execute(
             select(Tracker)
-            .join(Feed, Tracker.feed_id == Feed.id)
-            .join(User, Feed.owner_id == User.id)
-            .where(User.provider_subject == subject)
+            .where(Tracker.feed_id.in_(accessible_feed_ids(user_id)))
             .where(Tracker.id == tracker_id)
         )
         if result.scalar_one_or_none() is None:
             raise PermissionError("Tracker not found or access denied")
         return await super().insert_model(request, data)
 
-    async def _get_owned_rule(
-        self, request: Request, pk: str | int
-    ) -> TrackerRule:
-        subject = _current_subject(request)
+    async def _get_owned_rule(self, request: Request, pk: str | int) -> TrackerRule:
+        user_id = _current_user_id(request)
         session: AsyncSession = request.state.session
         result = await session.execute(
-            self._base_query(subject).where(TrackerRule.id == int(pk))
+            self._base_query(user_id).where(TrackerRule.id == int(pk))
         )
         rule = result.scalar_one_or_none()
         if rule is None:

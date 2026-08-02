@@ -44,8 +44,9 @@
 
 {% macro display_menu(menu, request) %}
 {% set display_name = request.session.get("display_name") %}
-{% set email = request.session.get("email") or request.session.get("subject") %}
-{% if email %}
+{# No `subject` fallback: it is now an opaque provider UUID, not a name. #}
+{% set email = request.session.get("email") %}
+{% if email or display_name %}
 <div class="navbar-nav mb-2">
   <div class="nav-item">
     <span class="nav-link" style="pointer-events: none;">
@@ -53,8 +54,8 @@
         <i class="fa fa-user"></i>
       </span>
       <span class="nav-link-title">
-        {% if display_name %}<strong>{{ display_name }}</strong><br>{% endif %}
-        <small>{{ email }}</small>
+        {% if display_name %}<strong>{{ display_name }}</strong>{% if email %}<br>{% endif %}{% endif %}
+        {% if email %}<small>{{ email }}</small>{% endif %}
       </span>
     </span>
   </div>

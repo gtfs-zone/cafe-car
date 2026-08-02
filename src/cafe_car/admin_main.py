@@ -12,7 +12,7 @@ from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from cafe_car.admin.auth import OIDCAuthBackend
-from cafe_car.admin.context import current_subject_var
+from cafe_car.admin.context import current_user_id_var
 from cafe_car.admin.entity_router import router as entity_router
 from cafe_car.admin.links import editor_url, viz_url
 from cafe_car.admin.views import (
@@ -72,7 +72,7 @@ class SubjectMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         if request.url.path.startswith(STATICS_PREFIX):
             return await call_next(request)
-        current_subject_var.set(request.session.get("subject", ""))
+        current_user_id_var.set(int(request.session.get("user_id") or 0))
         return await call_next(request)
 
 
@@ -120,6 +120,19 @@ def create_admin_app() -> FastAPI:
     admin.add_view(TrackerRuleAdmin)
     admin.add_view(ServiceAlertAdmin)
     admin.add_view(InformedEntityAdmin)
+
+    # The scoped views raise PermissionError when a row is not the caller's.
+    # Without this it escapes as a 500; once feeds are shared, non-owners hit
+    # the owner-only paths legitimately and deserve a real answer.
+    async def access_denied(request: Request, exc: Exception) -> Response:
+        return await admin.templates.TemplateResponse(
+            request,
+            "sqladmin/error.html",
+            {"status_code": 403, "message": str(exc) or "Access denied"},
+            status_code=403,
+        )
+
+    admin.admin.add_exception_handler(PermissionError, access_denied)
 
     # Expose cross-app deep-link helpers to the feed detail template.
     admin.templates.env.globals["viz_url"] = viz_url

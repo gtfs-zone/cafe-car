@@ -7,10 +7,10 @@ from railroad_club.models.feed import Feed
 from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
 from railroad_club.models.tracker import Tracker
-from railroad_club.models.user import User
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cafe_car.admin.access import accessible_feed_ids
 from cafe_car.traccar import build_config_url, qr_svg
 
 router = APIRouter()
@@ -45,14 +45,15 @@ _ROUTE_TYPE_LABELS = {
 }
 
 
-async def _verify_alert_ownership(
-    session: AsyncSession, subject: str, alert_id: int
-) -> bool:
+def _current_user_id(request: Request) -> int:
+    """0 when unauthenticated, which every access subquery matches nothing for."""
+    return int(request.session.get("user_id") or 0)
+
+
+async def _may_touch_alert(session: AsyncSession, user_id: int, alert_id: int) -> bool:
     result = await session.execute(
         select(ServiceAlert)
-        .join(Feed, ServiceAlert.feed_id == Feed.id)
-        .join(User, Feed.owner_id == User.id)
-        .where(User.provider_subject == subject)
+        .where(ServiceAlert.feed_id.in_(accessible_feed_ids(user_id)))
         .where(ServiceAlert.id == alert_id)
     )
     return result.scalar_one_or_none() is not None
@@ -85,9 +86,9 @@ def _render_partial(
 
 @router.get("/service-alert/{alert_id}/entity-partial", response_class=HTMLResponse)
 async def entity_partial(request: Request, alert_id: int) -> HTMLResponse:
-    subject = request.session.get("subject", "")
+    user_id = _current_user_id(request)
     session: AsyncSession = request.state.session
-    if not await _verify_alert_ownership(session, subject, alert_id):
+    if not await _may_touch_alert(session, user_id, alert_id):
         return HTMLResponse("<p>Not found or access denied.</p>", status_code=403)
     entities = await _load_entities(session, alert_id)
     return _render_partial(request, alert_id, entities)
@@ -108,9 +109,9 @@ async def add_entity(
     trip_start_time: str = Form(default=""),
     trip_start_date: str = Form(default=""),
 ) -> HTMLResponse:
-    subject = request.session.get("subject", "")
+    user_id = _current_user_id(request)
     session: AsyncSession = request.state.session
-    if not await _verify_alert_ownership(session, subject, alert_id):
+    if not await _may_touch_alert(session, user_id, alert_id):
         return HTMLResponse("<p>Not found or access denied.</p>", status_code=403)
 
     def to_none(s: str) -> str | None:
@@ -144,28 +145,24 @@ async def add_entity(
     return _render_partial(request, alert_id, entities)
 
 
-async def _load_owned_tracker(
-    session: AsyncSession, subject: str, tracker_id: str
+async def _load_accessible_tracker(
+    session: AsyncSession, user_id: int, tracker_id: str
 ) -> Tracker | None:
     result = await session.execute(
         select(Tracker)
-        .join(Feed, Tracker.feed_id == Feed.id)
-        .join(User, Feed.owner_id == User.id)
-        .where(User.provider_subject == subject)
+        .where(Tracker.feed_id.in_(accessible_feed_ids(user_id)))
         .where(Tracker.id == tracker_id)
     )
     return result.scalar_one_or_none()
 
 
-@router.get(
-    "/tracker/{tracker_id}/provisioning-partial", response_class=HTMLResponse
-)
+@router.get("/tracker/{tracker_id}/provisioning-partial", response_class=HTMLResponse)
 async def tracker_provisioning_partial(
     request: Request, tracker_id: str
 ) -> HTMLResponse:
-    subject = request.session.get("subject", "")
+    user_id = _current_user_id(request)
     session: AsyncSession = request.state.session
-    tracker = await _load_owned_tracker(session, subject, tracker_id)
+    tracker = await _load_accessible_tracker(session, user_id, tracker_id)
     if tracker is None:
         return HTMLResponse("<p>Not found or access denied.</p>", status_code=403)
     config_url = build_config_url(tracker.id)
@@ -183,12 +180,11 @@ async def tracker_provisioning_partial(
 
 @router.post("/feeds/{feed_id}/reload")
 async def reload_feed(request: Request, feed_id: int) -> RedirectResponse:
-    subject = request.session.get("subject", "")
+    user_id = _current_user_id(request)
     session: AsyncSession = request.state.session
     result = await session.execute(
         select(Feed)
-        .join(User, Feed.owner_id == User.id)
-        .where(User.provider_subject == subject)
+        .where(Feed.id.in_(accessible_feed_ids(user_id)))
         .where(Feed.id == feed_id)
     )
     if result.scalar_one_or_none() is None:
@@ -208,9 +204,9 @@ async def reload_feed(request: Request, feed_id: int) -> RedirectResponse:
 async def delete_entity(
     request: Request, alert_id: int, entity_id: int
 ) -> HTMLResponse:
-    subject = request.session.get("subject", "")
+    user_id = _current_user_id(request)
     session: AsyncSession = request.state.session
-    if not await _verify_alert_ownership(session, subject, alert_id):
+    if not await _may_touch_alert(session, user_id, alert_id):
         return HTMLResponse("<p>Not found or access denied.</p>", status_code=403)
 
     result = await session.execute(

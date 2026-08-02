@@ -8,7 +8,9 @@ class Settings(BaseSettings):
     database_url: PostgresDsn
     redis_url: RedisDsn
     session_secret_key: str
-    oidc_provider: str = "dex"
+    # Namespaces the `provider_subject` of an Identity. Keycloak is the issuer
+    # oauth2-proxy talks to; a subject is only meaningful within one issuer.
+    oidc_provider: str = "keycloak"
     oauth2_proxy_logout_url: str = "/oauth2/sign_out"
     debug: bool = False
     celery_broker_url: str = "redis://redis:6379/3"
