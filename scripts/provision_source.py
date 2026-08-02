@@ -8,7 +8,7 @@ Traccar device via REST, then prints the tracker `id` to paste into the
 producer's env (e.g. hell-gate-bridge `INGEST_VEHICLE_ID`).
 
 Because `gtfs_rt.py` scans `vehicle:{tracker.id}:*`, the producer MUST publish
-under `vehicle_id == <tracker.id>` for its positions to appear in the feed.
+under `tracker_id == <tracker.id>` for its positions to appear in the feed.
 
 The script is idempotent: re-running with the same `--feed-name`/`--nickname`
 reuses the existing rows and Traccar device rather than duplicating them.

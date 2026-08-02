@@ -50,7 +50,6 @@ async def trip_updates(
     # A >24h daily trip has several instances of the same trip_id live at once,
     # distinguished by start_date — so dedup on the pair, not trip_id alone.
     seen: set[tuple[str, str | None]] = set()
-    entity_id = 0
     for tracker in trackers:
         async for key in redis.scan_iter(f"vehicle:{tracker.id}:*"):
             vehicle_raw = await redis.get(key)
@@ -73,17 +72,22 @@ async def trip_updates(
             trip_data = json.loads(trip_raw)
 
             seen.add((trip_id, start_date))
-            entity_id += 1
             entity = msg.entity.add()
-            entity.id = str(entity_id)
+            # Stable per trip-instance across polls; it is exactly the dedup key
+            # and carries no secret (unlike a scan-order counter, which reshuffled
+            # between polls and was unusable as a focus key).
+            entity.id = f"{trip_id}:{start_date}" if start_date else trip_id
             entity.trip_update.trip.trip_id = trip_data["trip_id"]
             entity.trip_update.trip.schedule_relationship = (
                 gtfs_realtime_pb2.TripDescriptor.SCHEDULED
             )
             if start_date:
                 entity.trip_update.trip.start_date = start_date
-            # Public label only — never the secret tracker id.
-            entity.trip_update.vehicle.id = tracker.nickname
+            # Public per-vehicle id from the producer, else the tracker nickname.
+            # Never the secret tracker id.
+            entity.trip_update.vehicle.id = (
+                trip_data.get("vehicle_id") or tracker.nickname
+            )
             entity.trip_update.timestamp = trip_data["timestamp"]
             for update in _stop_time_updates(trip_data):
                 stu = entity.trip_update.stop_time_update.add()
@@ -151,7 +155,6 @@ async def vehicle_positions(
 
     redis = request.app.state.redis
 
-    entity_id = 0
     for tracker in trackers:
         async for key in redis.scan_iter(f"vehicle:{tracker.id}:*"):
             raw = await redis.get(key)
@@ -159,19 +162,34 @@ async def vehicle_positions(
                 continue
             data = json.loads(raw)
 
-            entity_id += 1
+            trip_id = data.get("trip_id")
+            start_date = data.get("start_date")
             entity = msg.entity.add()
-            entity.id = str(entity_id)
+            # Public per-vehicle identity from the producer. One tracker credential
+            # can carry many concurrent vehicles (Amtrak's fleet under one id), so
+            # the tracker nickname is only a fallback for single-device producers.
+            public_id = data.get("vehicle_id")
+            # entity.id must be unique within the message, stable across polls, and
+            # free of the secret tracker id. A running scan-order counter satisfied
+            # none of those; derive it from the record's own identity instead.
+            if public_id:
+                entity.id = public_id
+            elif trip_id:
+                instance = f"{trip_id}:{start_date}" if start_date else trip_id
+                entity.id = f"{tracker.nickname}:{instance}"
+            else:
+                entity.id = tracker.nickname
             # Public label only (the tracker id is the secret credential).
-            entity.vehicle.vehicle.id = tracker.nickname
-            entity.vehicle.vehicle.label = tracker.nickname
+            entity.vehicle.vehicle.id = public_id or tracker.nickname
+            entity.vehicle.vehicle.label = (
+                data.get("vehicle_label") or public_id or tracker.nickname
+            )
             entity.vehicle.position.latitude = data["lat"]
             entity.vehicle.position.longitude = data["lon"]
             if data["bearing"] is not None:
                 entity.vehicle.position.bearing = data["bearing"]
             if data["speed"] is not None:
                 entity.vehicle.position.speed = data["speed"]
-            trip_id = data.get("trip_id")
             if trip_id is not None:
                 # Only emit a TripDescriptor when the vehicle is tied to a trip.
                 # A tracker with no active rule resolves trip_id to None; that is
@@ -183,7 +201,7 @@ async def vehicle_positions(
                 )
                 # start_date disambiguates concurrent instances of a >24h daily
                 # trip (see ingest.py); pass it through so consumers can too.
-                if start_date := data.get("start_date"):
+                if start_date:
                     entity.vehicle.trip.start_date = start_date
                 if route_id := data.get("route_id"):
                     entity.vehicle.trip.route_id = route_id

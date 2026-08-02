@@ -10,7 +10,7 @@ Today's date is used so the trip runs in wall-clock sync when --speed 1 is used.
 
 Positions are POSTed to cafe-car's `/ingest/position` (the direct HTTP ingest
 seam), authenticated with a shared bearer token. Each trip reports under
-vehicle_id=tracker, trip_id=<trip>, so cafe-car's `vehicle:{tracker}:*` scan
+tracker_id=tracker, trip_id=<trip>, so cafe-car's `vehicle:{tracker}:*` scan
 picks it up.
 
 Usage:
@@ -465,7 +465,7 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
     if args.mode == "device":
         print(f"{prefix} Device:     {args.traccar_url}?id={args.tracker}  (trip resolved server-side from rules)")
     else:
-        print(f"{prefix} Ingest:     {args.ingest_url}/ingest/position  vehicle_id={args.tracker}  trip_id={published_trip_id}")
+        print(f"{prefix} Ingest:     {args.ingest_url}/ingest/position  tracker_id={args.tracker}  trip_id={published_trip_id}")
     print()
 
     position_url = f"{args.ingest_url.rstrip('/')}/ingest/position"
@@ -512,7 +512,7 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
                 tst = today_midnight + int(stop_schedule[0][0] + schedule_elapsed + delay_seconds)
 
             body = {
-                "vehicle_id": args.tracker,
+                "tracker_id": args.tracker,
                 "trip_id": published_trip_id,
                 "lat": round(lat, 6),
                 "lon": round(lon, 6),
@@ -528,7 +528,7 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
             current_stop = stop_times[stop_idx]
             trip_update_body = {
                 "trip_id": published_trip_id,
-                "vehicle_id": args.tracker,
+                "tracker_id": args.tracker,
                 "timestamp": tst,
                 "stop_time_updates": [
                     {

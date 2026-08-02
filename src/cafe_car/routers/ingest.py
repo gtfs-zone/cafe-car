@@ -28,7 +28,16 @@ TRIP_UPDATE_TTL = 300
 
 
 class PositionIngest(BaseModel):
-    vehicle_id: str
+    # The secret tracker credential (Tracker.id). Selects the
+    # `vehicle:{tracker_id}:*` namespace cafe-car scans; never emitted in a feed.
+    tracker_id: str
+    # Public per-vehicle identity. One tracker credential can fan out to many
+    # concurrent vehicles (e.g. Amtrak's ~53 trains under one credential), so the
+    # producer — which knows the real vehicle — supplies its GTFS
+    # VehicleDescriptor.id/label here. Absent for single-device producers, which
+    # fall back to the tracker nickname at serialisation.
+    vehicle_id: str | None = None
+    vehicle_label: str | None = None
     trip_id: str
     lat: float
     lon: float
@@ -57,18 +66,22 @@ class StopTimeUpdateIngest(BaseModel):
 
 class TripUpdateIngest(BaseModel):
     trip_id: str
-    vehicle_id: str
+    tracker_id: str
+    # Public per-vehicle identity (see PositionIngest); emitted as the
+    # TripUpdate's VehicleDescriptor.id, falling back to the tracker nickname.
+    vehicle_id: str | None = None
+    vehicle_label: str | None = None
     timestamp: int  # epoch seconds
     stop_time_updates: list[StopTimeUpdateIngest]
     start_date: str | None = None  # see PositionIngest.start_date
 
 
-def _vehicle_key(vehicle_id: str, trip_id: str, start_date: str | None) -> str:
+def _vehicle_key(tracker_id: str, trip_id: str, start_date: str | None) -> str:
     # Appending start_date (when present) gives concurrent instances of one
     # long-running daily trip distinct keys. The `vehicle:{tracker_id}:*` scan in
     # gtfs_rt.py still matches.
     slug = f"{trip_id}:{start_date}" if start_date else trip_id
-    return f"vehicle:{vehicle_id}:{slug}"
+    return f"vehicle:{tracker_id}:{slug}"
 
 
 def _trip_update_key(trip_id: str, start_date: str | None) -> str:
@@ -97,9 +110,9 @@ async def ingest_position(
 
     # Byte-for-byte the record the vehicle-poser shim writes; keys read by
     # gtfs_rt.py::vehicle_positions (tracker_id, trip_id, lat, lon, bearing,
-    # speed, timestamp, optional route_id). vehicle_id is the tracker id.
+    # speed, timestamp, optional route_id, optional public vehicle_id/label).
     record: dict[str, object] = {
-        "tracker_id": body.vehicle_id,
+        "tracker_id": body.tracker_id,
         "trip_id": body.trip_id,
         "lat": body.lat,
         "lon": body.lon,
@@ -111,8 +124,12 @@ async def ingest_position(
         record["route_id"] = body.route_id
     if body.start_date:
         record["start_date"] = body.start_date
+    if body.vehicle_id:
+        record["vehicle_id"] = body.vehicle_id
+    if body.vehicle_label:
+        record["vehicle_label"] = body.vehicle_label
 
-    key = _vehicle_key(body.vehicle_id, body.trip_id, body.start_date)
+    key = _vehicle_key(body.tracker_id, body.trip_id, body.start_date)
     await request.app.state.redis.setex(key, POSITION_TTL, json.dumps(record))
     return {"status": "ok"}
 
@@ -130,7 +147,7 @@ async def ingest_trip_update(
     # hell-gate, simulate_trip.py) now supply per-stop predictions directly.
     record = {
         "trip_id": body.trip_id,
-        "vehicle_id": body.vehicle_id,
+        "tracker_id": body.tracker_id,
         "timestamp": body.timestamp,
         "stop_time_updates": [
             stu.model_dump(exclude_none=True) for stu in body.stop_time_updates
@@ -138,6 +155,10 @@ async def ingest_trip_update(
     }
     if body.start_date:
         record["start_date"] = body.start_date
+    if body.vehicle_id:
+        record["vehicle_id"] = body.vehicle_id
+    if body.vehicle_label:
+        record["vehicle_label"] = body.vehicle_label
     key = _trip_update_key(body.trip_id, body.start_date)
     await request.app.state.redis.setex(key, TRIP_UPDATE_TTL, json.dumps(record))
     return {"status": "ok"}
