@@ -12,7 +12,7 @@ _engine = None
 def _asyncpg_url(url: str) -> str:
     for prefix in ("postgresql+psycopg2://", "postgresql://", "postgres://"):
         if url.startswith(prefix):
-            return "postgresql+asyncpg://" + url[len(prefix):]
+            return "postgresql+asyncpg://" + url[len(prefix) :]
     return url
 
 

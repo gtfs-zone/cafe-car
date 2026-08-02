@@ -4,13 +4,24 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from railroad_club.models.feed import Feed
+from railroad_club.models.identity import Identity
 from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
 from railroad_club.models.tracker import Tracker
+from railroad_club.models.user import User
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cafe_car.admin.access import accessible_feed_ids
+from cafe_car.settings import get_settings
+from cafe_car.sharing import (
+    list_members,
+    list_open_invites,
+    remove_member,
+    revoke_invite,
+    share_feed,
+    transfer_ownership,
+)
 from cafe_car.traccar import build_config_url, qr_svg
 
 router = APIRouter()
@@ -45,9 +56,32 @@ _ROUTE_TYPE_LABELS = {
 }
 
 
-def _current_user_id(request: Request) -> int:
-    """0 when unauthenticated, which every access subquery matches nothing for."""
-    return int(request.session.get("user_id") or 0)
+async def _current_user_id(request: Request) -> int:
+    """Who is calling, according to oauth2-proxy.
+
+    These routes sit outside SQLAdmin, so nothing has run `authenticate` for
+    them and the session cookie may be stale or belong to whoever used this
+    browser last. The proxy header is the authority: the cached session id is
+    used only when it agrees with the header, and otherwise the identity is
+    looked up afresh. Returns 0 — which matches no rows anywhere — rather than
+    falling back to the cookie.
+    """
+    subject = request.headers.get("X-Auth-Request-User") or request.headers.get(
+        "X-Forwarded-User"
+    )
+    if not subject:
+        return 0
+    cached = request.session.get("user_id")
+    if cached and request.session.get("subject") == subject:
+        return int(cached)
+    session: AsyncSession = request.state.session
+    user_id = await session.scalar(
+        select(Identity.user_id).where(
+            Identity.provider == get_settings().oidc_provider,
+            Identity.provider_subject == subject,
+        )
+    )
+    return int(user_id or 0)
 
 
 async def _may_touch_alert(session: AsyncSession, user_id: int, alert_id: int) -> bool:
@@ -86,7 +120,7 @@ def _render_partial(
 
 @router.get("/service-alert/{alert_id}/entity-partial", response_class=HTMLResponse)
 async def entity_partial(request: Request, alert_id: int) -> HTMLResponse:
-    user_id = _current_user_id(request)
+    user_id = await _current_user_id(request)
     session: AsyncSession = request.state.session
     if not await _may_touch_alert(session, user_id, alert_id):
         return HTMLResponse("<p>Not found or access denied.</p>", status_code=403)
@@ -109,7 +143,7 @@ async def add_entity(
     trip_start_time: str = Form(default=""),
     trip_start_date: str = Form(default=""),
 ) -> HTMLResponse:
-    user_id = _current_user_id(request)
+    user_id = await _current_user_id(request)
     session: AsyncSession = request.state.session
     if not await _may_touch_alert(session, user_id, alert_id):
         return HTMLResponse("<p>Not found or access denied.</p>", status_code=403)
@@ -160,7 +194,7 @@ async def _load_accessible_tracker(
 async def tracker_provisioning_partial(
     request: Request, tracker_id: str
 ) -> HTMLResponse:
-    user_id = _current_user_id(request)
+    user_id = await _current_user_id(request)
     session: AsyncSession = request.state.session
     tracker = await _load_accessible_tracker(session, user_id, tracker_id)
     if tracker is None:
@@ -180,7 +214,7 @@ async def tracker_provisioning_partial(
 
 @router.post("/feeds/{feed_id}/reload")
 async def reload_feed(request: Request, feed_id: int) -> RedirectResponse:
-    user_id = _current_user_id(request)
+    user_id = await _current_user_id(request)
     session: AsyncSession = request.state.session
     result = await session.execute(
         select(Feed)
@@ -204,7 +238,7 @@ async def reload_feed(request: Request, feed_id: int) -> RedirectResponse:
 async def delete_entity(
     request: Request, alert_id: int, entity_id: int
 ) -> HTMLResponse:
-    user_id = _current_user_id(request)
+    user_id = await _current_user_id(request)
     session: AsyncSession = request.state.session
     if not await _may_touch_alert(session, user_id, alert_id):
         return HTMLResponse("<p>Not found or access denied.</p>", status_code=403)
@@ -222,3 +256,141 @@ async def delete_entity(
 
     entities = await _load_entities(session, alert_id)
     return _render_partial(request, alert_id, entities)
+
+
+# ── Feed sharing ─────────────────────────────────────────────────────────────
+#
+# Membership is only ever changed here, never through a SQLAdmin form widget,
+# so that "may this caller do this?" is answered server-side on every path.
+
+
+async def _load_accessible_feed(
+    session: AsyncSession, user_id: int, feed_id: int
+) -> Feed | None:
+    return await session.scalar(
+        select(Feed)
+        .where(Feed.id.in_(accessible_feed_ids(user_id)))
+        .where(Feed.id == feed_id)
+    )
+
+
+async def _load_owned_feed(
+    session: AsyncSession, user_id: int, feed_id: int
+) -> Feed | None:
+    return await session.scalar(
+        select(Feed).where(Feed.owner_id == user_id, Feed.id == feed_id)
+    )
+
+
+async def _render_members(
+    request: Request,
+    session: AsyncSession,
+    feed: Feed,
+    user_id: int,
+    message: str | None = None,
+    error: str | None = None,
+) -> HTMLResponse:
+    owner = await session.get(User, feed.owner_id)
+    return templates.TemplateResponse(
+        request,
+        "sqladmin/_members_partial.html",
+        {
+            "feed": feed,
+            "owner": owner,
+            "members": await list_members(session, feed.id),
+            "invites": await list_open_invites(session, feed.id),
+            "is_owner": feed.owner_id == user_id,
+            "current_user_id": user_id,
+            "message": message,
+            "error": error,
+        },
+    )
+
+
+@router.get("/feeds/{feed_id}/members-partial", response_class=HTMLResponse)
+async def members_partial(request: Request, feed_id: int) -> HTMLResponse:
+    user_id = await _current_user_id(request)
+    session: AsyncSession = request.state.session
+    feed = await _load_accessible_feed(session, user_id, feed_id)
+    if feed is None:
+        return HTMLResponse("<p>Not found or access denied.</p>", status_code=403)
+    return await _render_members(request, session, feed, user_id)
+
+
+@router.post("/feeds/{feed_id}/members", response_class=HTMLResponse)
+async def add_member(
+    request: Request, feed_id: int, email: str = Form(default="")
+) -> HTMLResponse:
+    user_id = await _current_user_id(request)
+    session: AsyncSession = request.state.session
+    feed = await _load_owned_feed(session, user_id, feed_id)
+    if feed is None:
+        return HTMLResponse(
+            "<p>Only the owner can share this feed.</p>", status_code=403
+        )
+    result = await share_feed(session, feed, email, added_by_user_id=user_id)
+    ok = result.kind in ("member", "invited")
+    return await _render_members(
+        request,
+        session,
+        feed,
+        user_id,
+        message=result.message if ok else None,
+        error=None if ok else result.message,
+    )
+
+
+@router.delete("/feeds/{feed_id}/members/{member_user_id}", response_class=HTMLResponse)
+async def delete_member(
+    request: Request, feed_id: int, member_user_id: int
+) -> HTMLResponse:
+    user_id = await _current_user_id(request)
+    session: AsyncSession = request.state.session
+    feed = await _load_owned_feed(session, user_id, feed_id)
+    if feed is None:
+        return HTMLResponse(
+            "<p>Only the owner can change access to this feed.</p>", status_code=403
+        )
+    await remove_member(session, feed_id, member_user_id)
+    return await _render_members(
+        request, session, feed, user_id, message="Access removed."
+    )
+
+
+@router.delete("/feeds/{feed_id}/invites/{invite_id}", response_class=HTMLResponse)
+async def delete_invite(request: Request, feed_id: int, invite_id: int) -> HTMLResponse:
+    user_id = await _current_user_id(request)
+    session: AsyncSession = request.state.session
+    feed = await _load_owned_feed(session, user_id, feed_id)
+    if feed is None:
+        return HTMLResponse(
+            "<p>Only the owner can change access to this feed.</p>", status_code=403
+        )
+    await revoke_invite(session, feed_id, invite_id)
+    return await _render_members(
+        request, session, feed, user_id, message="Invitation withdrawn."
+    )
+
+
+@router.post("/feeds/{feed_id}/transfer", response_class=HTMLResponse)
+async def transfer_feed(
+    request: Request, feed_id: int, new_owner_id: int = Form()
+) -> HTMLResponse:
+    user_id = await _current_user_id(request)
+    session: AsyncSession = request.state.session
+    feed = await _load_owned_feed(session, user_id, feed_id)
+    if feed is None:
+        return HTMLResponse(
+            "<p>Only the owner can hand over this feed.</p>", status_code=403
+        )
+    try:
+        await transfer_ownership(session, feed, new_owner_id)
+    except PermissionError as exc:
+        return await _render_members(request, session, feed, user_id, error=str(exc))
+    return await _render_members(
+        request,
+        session,
+        feed,
+        user_id,
+        message="Ownership transferred. You are now a member of this feed.",
+    )

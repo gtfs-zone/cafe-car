@@ -1,0 +1,118 @@
+<div id="members-section">
+  {% if error %}
+  <div class="alert alert-danger" role="alert">{{ error }}</div>
+  {% endif %}
+  {% if message %}
+  <div class="alert alert-success" role="alert">{{ message }}</div>
+  {% endif %}
+
+  <div class="table-responsive mb-3">
+    <table class="table table-vcenter table-bordered table-sm">
+      <thead>
+        <tr>
+          <th>Person</th>
+          <th>Email</th>
+          <th>Access</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>{{ owner.display_name or "—" }}</td>
+          <td>{{ owner.primary_email or "—" }}</td>
+          <td><span class="badge bg-green">owner</span></td>
+          <td></td>
+        </tr>
+        {% for member in members %}
+        <tr>
+          <td>{{ member.user.display_name or "—" }}</td>
+          <td>{{ member.user.primary_email or "—" }}</td>
+          <td>
+            <span class="badge bg-blue">member</span>
+            {% if member.user_id == current_user_id %}<em>(you)</em>{% endif %}
+          </td>
+          <td>
+            {% if is_owner %}
+            <button class="btn btn-sm btn-danger"
+                    hx-delete="/feeds/{{ feed.id }}/members/{{ member.user_id }}"
+                    hx-target="#members-section"
+                    hx-swap="outerHTML"
+                    hx-confirm="Remove {{ member.user.primary_email or 'this person' }} from {{ feed.feed_name }}?">
+              Remove
+            </button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        {% for invite in invites %}
+        <tr class="text-muted">
+          <td><em>not signed in yet</em></td>
+          <td>{{ invite.email }}</td>
+          <td><span class="badge bg-yellow">invited</span></td>
+          <td>
+            {% if is_owner %}
+            <button class="btn btn-sm btn-danger"
+                    hx-delete="/feeds/{{ feed.id }}/invites/{{ invite.id }}"
+                    hx-target="#members-section"
+                    hx-swap="outerHTML"
+                    hx-confirm="Withdraw the invitation for {{ invite.email }}?">
+              Withdraw
+            </button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if is_owner %}
+  <form hx-post="/feeds/{{ feed.id }}/members"
+        hx-target="#members-section"
+        hx-swap="outerHTML"
+        class="row g-2 align-items-end mb-3">
+    <div class="col-auto">
+      <label class="form-label" for="share-email">Share with</label>
+      <input type="email" class="form-control" id="share-email" name="email"
+             placeholder="person@example.com" required>
+    </div>
+    <div class="col-auto">
+      <button type="submit" class="btn btn-primary">Add</button>
+    </div>
+    <div class="col-12">
+      <small class="text-muted">
+        Members can do everything you can with this feed except change who owns
+        it, delete it, or manage this list. That includes seeing its tracker
+        IDs, which are the secret credentials a driver's phone signs in with —
+        so only add people you would hand those to.
+      </small>
+    </div>
+  </form>
+
+  {% if members %}
+  <form hx-post="/feeds/{{ feed.id }}/transfer"
+        hx-target="#members-section"
+        hx-swap="outerHTML"
+        hx-confirm="Hand {{ feed.feed_name }} over? You will become an ordinary member and cannot take it back yourself."
+        class="row g-2 align-items-end">
+    <div class="col-auto">
+      <label class="form-label" for="new-owner">Transfer ownership to</label>
+      <select class="form-select" id="new-owner" name="new_owner_id">
+        {% for member in members %}
+        <option value="{{ member.user_id }}">
+          {{ member.user.display_name or member.user.primary_email or "user " ~ member.user_id }}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-auto">
+      <button type="submit" class="btn btn-outline-danger">Transfer</button>
+    </div>
+  </form>
+  {% endif %}
+  {% else %}
+  <p class="text-muted mb-0">
+    This feed is shared with you. Only its owner can change who has access.
+  </p>
+  {% endif %}
+</div>

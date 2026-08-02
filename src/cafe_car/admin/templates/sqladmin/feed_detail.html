@@ -3,6 +3,18 @@
 {{ super() }}
 <div class="col-12">
   <div class="card mt-3">
+    <div class="card-header"><h3 class="card-title">People</h3></div>
+    <div class="card-body">
+      <div hx-get="/feeds/{{ model.id }}/members-partial"
+           hx-trigger="load"
+           hx-swap="outerHTML">
+        <p class="text-muted">Loading&hellip;</p>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="col-12">
+  <div class="card mt-3">
     <div class="card-header"><h3 class="card-title">Open in&hellip;</h3></div>
     <div class="card-body">
       <a href="{{ viz_url(model) }}" target="_blank" rel="noopener noreferrer"

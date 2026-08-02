@@ -10,6 +10,7 @@ from cafe_car.accounts import resolve_login
 from cafe_car.admin.context import current_user_id_var
 from cafe_car.database import get_session_factory
 from cafe_car.settings import get_settings
+from cafe_car.sharing import claim_invites
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,9 @@ class OIDCAuthBackend(AuthenticationBackend):
                     email_verified=email_verified,
                     display_name=display_name,
                 )
+                # Feeds shared with them before they had an account. Matched on
+                # verified addresses only, inside claim_invites.
+                await claim_invites(session, user)
         except Exception:
             logger.exception("authenticate: DB error for subject=%s", subject)
             raise
