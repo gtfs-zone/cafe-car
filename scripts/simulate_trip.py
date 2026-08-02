@@ -522,9 +522,11 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
                 "route_id": route_id,
             }
 
-            # The sim already knows the current stop and its delay, so it emits
-            # the trip-update directly — no server-side recompute (that path,
-            # trip-updogger, is retired).
+            # The sim already knows the current stop and its delay, so in ingest
+            # mode it emits the trip-update directly rather than leaving
+            # trip-updogger to recompute it. (Device mode sends no trip-update at
+            # all — the fix goes to Traccar and trip-updogger derives the
+            # prediction from it, which is the path a real driver exercises.)
             current_stop = stop_times[stop_idx]
             trip_update_body = {
                 "trip_id": published_trip_id,
