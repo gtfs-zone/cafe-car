@@ -151,16 +151,25 @@ Identity  id, user_id FK, provider, provider_subject, email, email_verified,
 `User.provider` / `User.provider_subject` go away. `Feed.owner_id` keeps
 pointing at `user.id`, so no FK churn elsewhere.
 
-- [ ] Add `src/railroad_club/models/identity.py`; rework `models/user.py`
-      (drop `provider`/`provider_subject`, add `primary_email`, `created_at`,
-      `identities` relationship).
-- [ ] Alembic migration: create `identity`; backfill one `identity` row per
-      existing `user` row from its old columns; then drop the old columns and
-      the `UniqueConstraint("provider", "provider_subject")` on `user`.
-- [ ] Downgrade path: collapse the *earliest* identity per user back onto
-      `user` (lossy for genuinely-linked users — document that in the
-      migration docstring rather than pretending it round-trips).
-- [ ] Bump the railroad-club version and re-lock cafe-car (`uv lock --upgrade-package railroad-club`).
+- [x] Add `src/railroad_club/models/identity.py`; rework `models/user.py`.
+- [x] Alembic migration `a4b5c6d7e8f9`: create `identity`, backfill one row per
+      existing user, drop the old columns and `uq_user_provider_subject`.
+- [x] Lossy downgrade that collapses the earliest identity back, documented as
+      such in the migration docstring.
+- [x] Re-lock cafe-car against the new railroad-club.
+
+**Discoveries**
+
+- The unique constraint is named `uq_user_provider_subject` (from migration
+  `a1b2c3d4e5f6`), not the Postgres default — dropping it by the default name
+  would have failed on a real database.
+- Verified up → down → up against the dev database: `user.id` is preserved in
+  both directions, so feed ownership survives.
+- `alembic check` reports no drift from the new models. (It does report one
+  pre-existing drift, `ix_tracker_rule_tracker_id`, unrelated to this work.)
+- `email_verified` backfills as **false**, not true: nothing in the old schema
+  recorded whether an address was ever proven, and account linking keys off
+  this flag. Guessing true would have handed it a forged match to trust.
 
 **Gotchas**
 
@@ -193,20 +202,28 @@ def accessible_feed_ids(user_id: int) -> Select:      # owner OR member
 def owned_feed_ids(user_id: int) -> Select:           # owner only
 ```
 
-- [ ] Rewrite `src/cafe_car/admin/auth.py` around `Identity`; keep the existing
-      JWT-claim handling (including the `claims["sub"] == subject` guard) and
-      extend it to read `email_verified`.
-- [ ] Store `request.session["user_id"]` (int). Keep `subject`/`email`/
-      `display_name` in the session for display only.
-- [ ] Rename `current_subject_var` → `current_user_id_var`
-      (`admin/context.py`, `SubjectMiddleware` in `admin_main.py:75`).
-- [ ] Add `cafe_car/admin/access.py` with the two subquery helpers.
-- [ ] Convert all five ModelViews in `admin/views.py` to
-      `Feed.id.in_(accessible_feed_ids(uid))` (and `owned_feed_ids` where the
-      operation is owner-only).
-- [ ] Convert the four helpers in `admin/entity_router.py` the same way.
-- [ ] Update `admin/templates/sqladmin/_macros.html:47` (reads
-      `session["subject"]` as an email fallback).
+- [x] Rewrite `admin/auth.py` around `Identity`, via a new
+      `cafe_car/accounts.py::resolve_login`; keeps the `claims["sub"] ==
+      subject` guard and now reads `email_verified`.
+- [x] Store `request.session["user_id"]`; `subject` kept for display only.
+- [x] `current_subject_var` → `current_user_id_var`.
+- [x] Add `cafe_car/admin/access.py`.
+- [x] Convert all five ModelViews (18 scoping queries) and the four
+      `entity_router.py` helpers.
+- [x] Update `_macros.html` — the `subject` fallback is now a UUID, not a name,
+      so it was dropped rather than displayed.
+- [x] `oidc_provider` default `dex` → `keycloak`.
+- [x] PermissionError → 403 via a handler on SQLAdmin's sub-app (a handler on
+      the parent FastAPI app would not catch it — the mount has its own
+      exception middleware).
+
+**Discoveries**
+
+- Verified against the dev database with simulated proxy headers: two logins
+  create two users with correct identities and `email_verified` from the token;
+  alice's feed is invisible in bob's list; bob gets 404 on
+  `/feed/details/{id}` and `/feed/edit/{id}`, and 403 on delete and reload,
+  with the row still present afterwards.
 
 **Gotchas**
 
@@ -239,17 +256,35 @@ that check permission server-side.
 Ownership stays as `Feed.owner_id`. Owner is *not* also a `FeedMember` row —
 one representation per fact, so "is owner" is never ambiguous.
 
-- [ ] Add `src/railroad_club/models/feed_member.py` + relationships on `Feed`.
-- [ ] Alembic migration for `feed_member` (with the unique constraint and
-      `ON DELETE CASCADE` from `feed`).
-- [ ] Implement `accessible_feed_ids` as `owner_id == uid OR EXISTS(feed_member)`.
-- [ ] Owner-only operations, enforced in code not just UI:
-      - `FeedAdmin.delete_model` → `owned_feed_ids`
-      - `FeedAdmin.update_model` → members allowed, but **strip `owner_id` from
-        `data`** before `super()` so a crafted POST cannot transfer ownership
-      - member add/remove routes → owner only
-- [ ] `FeedAdmin.insert_model` keeps setting `owner_id` to the creator.
-- [ ] Add an "Owner" / "Shared with me" indicator column to the feed list.
+- [x] Add `models/feed_member.py` + `Feed.members` / `User.memberships`.
+- [x] Alembic migration `b5c6d7e8f9a0`, round-tripped against the dev database.
+- [x] `accessible_feed_ids` = owned OR member.
+- [x] Owner-only `delete_model`; `update_model` allows members but pops
+      `owner_id` from the submitted data.
+- [x] `insert_model` sets `owner_id` to the creator (and no longer re-queries
+      the user — the session already carries the id).
+- [x] "owner" / "shared with me" column on the feed list.
+- [ ] Member add/remove routes → owner only *(Phase 5, where they are written)*.
+
+**Discoveries — two bugs the new relationship exposed**
+
+- **`DetachedInstanceError` on the edit form.** WTForms' `process()` calls
+  `hasattr(obj, name)` across every attribute, which lazy-loads `Feed.members`
+  on a detached instance. Fixed by excluding `members` from the form — the same
+  reason `trackers` and `alerts` were already excluded. This is the M2M-adjacent
+  trap the plan predicted, and it fired immediately.
+- **The current-user ContextVar lagged one request behind.** `SubjectMiddleware`
+  set it from the session, but middleware runs *before* `authenticate`. On the
+  first request of a session it was 0; on a browser that switched users it still
+  held the previous user — and `scaffold_form` builds its feed dropdown from it,
+  so user B's first request would have listed user A's feed names. Now set in
+  `authenticate` once identity is known, with the middleware left as the
+  fallback for the non-SQLAdmin `entity_router` routes. This predates the
+  current work; the sharing badge is simply what made it visible.
+- Verified: a member sees the feed, opens details and edit, and an edit POST
+  carrying `owner_id` changes the URL but leaves ownership intact; delete is
+  403. A member's tracker-create dropdown lists the shared feed; an unrelated
+  user's lists nothing.
 
 **Gotchas**
 
