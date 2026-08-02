@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
 from cafe_car.admin.context import current_subject_var
+from cafe_car.admin.links import viz_url
 
 _STATUS_BADGE = {
     "pending": '<span style="color:#f59e0b;font-weight:bold">pending</span>',
@@ -83,6 +84,7 @@ def _current_subject(request: Request) -> str:
 
 
 class FeedAdmin(ModelView, model=Feed):
+    details_template = "sqladmin/feed_detail.html"
     form_args: ClassVar[dict] = {
         "feed_name": {
             "validators": [
@@ -102,11 +104,13 @@ class FeedAdmin(ModelView, model=Feed):
         Feed.static_feed_url,
         "load_status_badge",
         "last_loaded_at",
+        "viz_link",
         "reload_action",
     ]
     column_labels: ClassVar[dict] = {
         "load_status_badge": "Status",
         "last_loaded_at": "Last Loaded",
+        "viz_link": "",
         "reload_action": "",
     }
     column_formatters: ClassVar[dict] = {
@@ -123,6 +127,10 @@ class FeedAdmin(ModelView, model=Feed):
             _fmt_utc_dt(m.gtfs_static_feed.last_loaded_at)
             if m.gtfs_static_feed and m.gtfs_static_feed.last_loaded_at
             else Markup("—")
+        ),
+        "viz_link": lambda m, a: Markup(
+            f'<a href="{viz_url(m)}" target="_blank" rel="noopener noreferrer">'
+            f"Map &#8599;</a>"
         ),
         "reload_action": lambda m, a: Markup(
             f'<form method="post" action="/feeds/{m.id}/reload" style="margin:0">'

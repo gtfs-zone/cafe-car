@@ -14,6 +14,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from cafe_car.admin.auth import OIDCAuthBackend
 from cafe_car.admin.context import current_subject_var
 from cafe_car.admin.entity_router import router as entity_router
+from cafe_car.admin.links import editor_url, viz_url
 from cafe_car.admin.views import (
     FeedAdmin,
     InformedEntityAdmin,
@@ -119,6 +120,10 @@ def create_admin_app() -> FastAPI:
     admin.add_view(TrackerRuleAdmin)
     admin.add_view(ServiceAlertAdmin)
     admin.add_view(InformedEntityAdmin)
+
+    # Expose cross-app deep-link helpers to the feed detail template.
+    admin.templates.env.globals["viz_url"] = viz_url
+    admin.templates.env.globals["editor_url"] = editor_url
 
     return app
 
