@@ -36,6 +36,19 @@ async def favicon() -> FileResponse:
     return FileResponse(_STATIC_DIR / "favicon.svg", media_type="image/svg+xml")
 
 
+# htmx is vendored rather than pulled from a CDN: this is an auth-gated admin
+# where every other asset is local, and a CDN outage would leave the htmx-loaded
+# panels stuck on "Loading…" forever. StaticsCacheControlMiddleware only matches
+# /statics/, so set Cache-Control here.
+@router.get("/vendor/htmx.min.js", include_in_schema=False)
+async def htmx_js() -> FileResponse:
+    return FileResponse(
+        _STATIC_DIR / "htmx.min.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @router.get("/")
 async def root_redirect() -> RedirectResponse:
     return RedirectResponse(url="/feed/list")

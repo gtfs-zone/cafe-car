@@ -5,7 +5,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, ClassVar
 
-from markupsafe import Markup
+from markupsafe import Markup, escape
 from railroad_club.models.feed import Feed
 from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
@@ -26,10 +26,10 @@ from cafe_car.admin.context import current_user_id_var
 from cafe_car.admin.links import viz_url
 
 _STATUS_BADGE = {
-    "pending": '<span style="color:#f59e0b;font-weight:bold">pending</span>',
-    "running": '<span style="color:#3b82f6;font-weight:bold">running</span>',
-    "success": '<span style="color:#22c55e;font-weight:bold">success</span>',
-    "failed": '<span style="color:#ef4444;font-weight:bold">failed</span>',
+    "pending": '<span class="badge bg-yellow">pending</span>',
+    "running": '<span class="badge bg-blue">running</span>',
+    "success": '<span class="badge bg-green">success</span>',
+    "failed": '<span class="badge bg-red">failed</span>',
 }
 
 _CAUSE_CHOICES = [
@@ -84,8 +84,26 @@ def _current_user_id(request: Request) -> int:
     return int(request.session.get("user_id") or 0)
 
 
-class FeedAdmin(ModelView, model=Feed):
-    details_template = "sqladmin/feed_detail.html"
+def _link(href: str, label: object) -> Markup:
+    """An escaped anchor. Never interpolate model text into Markup directly —
+    nickname, header_text and trip_id are all free text, and Tracker.id is
+    caller-supplied at creation, so unescaped interpolation is stored XSS."""
+    return Markup(f'<a href="{escape(href)}">{escape(label)}</a>')
+
+
+class ScopedModelView(ModelView):
+    """Every view in this admin is per-user scoped and has no details page:
+    the edit page is the only page for an object, showing anything
+    non-editable read-only. The metaclass short-circuits without a `model=`
+    kwarg, so this stays an ordinary base class — but note it only reads
+    `name`, `column_list` and friends off the *concrete* subclass, so those
+    must never move up here."""
+
+    can_view_details: ClassVar[bool] = False
+
+
+class FeedAdmin(ScopedModelView, model=Feed):
+    edit_template = "sqladmin/feed_edit.html"
     form_args: ClassVar[dict] = {
         "feed_name": {
             "validators": [
@@ -117,19 +135,18 @@ class FeedAdmin(ModelView, model=Feed):
         "reload_action": "",
     }
     column_formatters: ClassVar[dict] = {
-        Feed.feed_name: (
-            lambda m, a: Markup(f'<a href="/feed/edit/{m.id}">{m.feed_name}</a>')
-        ),
+        Feed.feed_name: lambda m, a: _link(f"/feed/edit/{m.id}", m.feed_name),
         # Formatters get no request, so read the per-request ContextVar.
+        # Deliberately not blue: a blue badge here read as a broken link.
         "access_badge": lambda m, a: Markup(
-            '<span style="color:#22c55e;font-weight:bold">owner</span>'
+            '<span class="badge bg-green">owner</span>'
             if m.owner_id == current_user_id_var.get()
-            else '<span style="color:#3b82f6">shared with me</span>'
+            else '<span class="badge bg-secondary">shared with me</span>'
         ),
         "load_status_badge": lambda m, a: Markup(
             _STATUS_BADGE.get(
                 m.gtfs_static_feed.status if m.gtfs_static_feed else "",
-                '<span style="color:#9ca3af">—</span>',
+                '<span class="text-muted">—</span>',
             )
         ),
         "last_loaded_at": lambda m, a: (
@@ -154,7 +171,6 @@ class FeedAdmin(ModelView, model=Feed):
         "alerts",
         "owner_id",
         "gtfs_static_feed",
-        "aliases",
         # Membership is managed through its own owner-checked routes, never a
         # form widget. Leaving it in also makes WTForms touch the relationship
         # on a detached instance, which raises DetachedInstanceError.
@@ -181,13 +197,23 @@ class FeedAdmin(ModelView, model=Feed):
             Feed.id.in_(accessible_feed_ids(user_id))
         )
 
-    def details_query(self, request: Request) -> Select[tuple[Feed]]:
-        pk = request.path_params["pk"]
-        return self._base_query(_current_user_id(request)).where(Feed.id == int(pk))
-
     def form_edit_query(self, request: Request) -> Select[tuple[Feed]]:
+        # The edit page is the feed hub, and SQLAdmin closes the query's session
+        # before rendering — so everything the template touches must be eager
+        # loaded or it raises DetachedInstanceError. Safe alongside
+        # form_excluded_columns: exclusion is what keeps WTForms off these, and a
+        # selectinload'ed collection is already populated either way.
         pk = request.path_params["pk"]
-        return self._base_query(_current_user_id(request)).where(Feed.id == int(pk))
+        return (
+            self._base_query(_current_user_id(request))
+            .where(Feed.id == int(pk))
+            .options(
+                selectinload(Feed.owner),
+                selectinload(Feed.gtfs_static_feed),
+                selectinload(Feed.trackers).selectinload(Tracker.rules),
+                selectinload(Feed.alerts),
+            )
+        )
 
     async def insert_model(self, request: Request, data: dict) -> Feed:
         user_id = _current_user_id(request)
@@ -244,20 +270,13 @@ class FeedAdmin(ModelView, model=Feed):
             celery_app.send_task("schedule_foamer.tasks.load_feed", args=[model.id])
 
 
-class TrackerAdmin(ModelView, model=Tracker):
-    details_template = "sqladmin/tracker_detail.html"
-    column_list: ClassVar[list] = [Tracker.nickname, Tracker.id, "feed", "provisioning"]
-    column_labels: ClassVar[dict] = {
-        "provisioning": "Provisioning",
-        Tracker.id: "Tracker ID (secret)",
-    }
+class TrackerAdmin(ScopedModelView, model=Tracker):
+    edit_template = "sqladmin/tracker_edit.html"
+    # The secret id and the QR both live on the tracker's own page, which the
+    # nickname links to — a "provisioning" column here would just duplicate it.
+    column_list: ClassVar[list] = [Tracker.nickname, "feed"]
     column_formatters: ClassVar[dict] = {
-        Tracker.nickname: (
-            lambda m, a: Markup(f'<a href="/tracker/edit/{m.id}">{m.nickname}</a>')
-        ),
-        "provisioning": lambda m, a: Markup(
-            f'<a href="/tracker/details/{m.id}">QR / config URL</a>'
-        ),
+        Tracker.nickname: lambda m, a: _link(f"/tracker/edit/{m.id}", m.nickname),
     }
     column_searchable_list: ClassVar[list] = [Tracker.nickname]
     # ``id`` is a secret pet-name, prefilled with a random default and editable
@@ -299,13 +318,15 @@ class TrackerAdmin(ModelView, model=Tracker):
             Tracker.feed_id.in_(accessible_feed_ids(user_id))
         )
 
-    def details_query(self, request: Request) -> Select[tuple[Tracker]]:
-        pk = request.path_params["pk"]
-        return self._base_query(_current_user_id(request)).where(Tracker.id == pk)
-
     def form_edit_query(self, request: Request) -> Select[tuple[Tracker]]:
+        # ``rules`` is rendered on the edit page and the session is closed before
+        # the template runs, so it has to be eager loaded.
         pk = request.path_params["pk"]
-        return self._base_query(_current_user_id(request)).where(Tracker.id == pk)
+        return (
+            self._base_query(_current_user_id(request))
+            .where(Tracker.id == pk)
+            .options(selectinload(Tracker.rules))
+        )
 
     async def insert_model(self, request: Request, data: dict) -> Tracker:
         user_id = _current_user_id(request)
@@ -384,9 +405,8 @@ def _make_alert_datetimes_utc(data: dict) -> None:
             data[field] = val.replace(tzinfo=UTC)
 
 
-class ServiceAlertAdmin(ModelView, model=ServiceAlert):
+class ServiceAlertAdmin(ScopedModelView, model=ServiceAlert):
     edit_template = "sqladmin/service_alert_edit.html"
-    details_template = "sqladmin/service_alert_detail.html"
 
     form_args: ClassVar[dict] = {
         "header_text": {"validators": [Length(max=512)]},
@@ -408,12 +428,16 @@ class ServiceAlertAdmin(ModelView, model=ServiceAlert):
         "active_period_end": DateTimeLocalField,
     }
     column_formatters: ClassVar[dict] = {
+        ServiceAlert.header_text: (
+            lambda m, a: _link(f"/service-alert/edit/{m.id}", m.header_text)
+        ),
         ServiceAlert.active_period_start: (
             lambda m, a: _fmt_utc_dt(m.active_period_start)
         ),
         ServiceAlert.active_period_end: lambda m, a: _fmt_utc_dt(m.active_period_end),
+        # str(e) carries free-text route/stop ids straight from the user.
         "entity_summary": lambda m, a: Markup(
-            "<br>".join(str(e) for e in m.entities) or "<em>none</em>"
+            Markup("<br>").join(escape(e) for e in m.entities) or "<em>none</em>"
         ),
     }
     column_list: ClassVar[list] = [
@@ -462,11 +486,6 @@ class ServiceAlertAdmin(ModelView, model=ServiceAlert):
         return select(func.count(ServiceAlert.id)).where(
             ServiceAlert.feed_id.in_(accessible_feed_ids(user_id))
         )
-
-    def details_query(self, request: Request) -> Select[tuple[ServiceAlert]]:
-        pk = request.path_params["pk"]
-        user_id = _current_user_id(request)
-        return self._base_query(user_id).where(ServiceAlert.id == int(pk))
 
     def form_edit_query(self, request: Request) -> Select[tuple[ServiceAlert]]:
         pk = request.path_params["pk"]
@@ -528,7 +547,7 @@ _ROUTE_TYPE_CHOICES = [
 ]
 
 
-class InformedEntityAdmin(ModelView, model=InformedEntity):
+class InformedEntityAdmin(ScopedModelView, model=InformedEntity):
     def is_visible(self, request: Request) -> bool:
         return False
 
@@ -589,11 +608,6 @@ class InformedEntityAdmin(ModelView, model=InformedEntity):
             .where(ServiceAlert.feed_id.in_(accessible_feed_ids(user_id)))
         )
 
-    def details_query(self, request: Request) -> Select[tuple[InformedEntity]]:
-        pk = request.path_params["pk"]
-        user_id = _current_user_id(request)
-        return self._base_query(user_id).where(InformedEntity.id == int(pk))
-
     def form_edit_query(self, request: Request) -> Select[tuple[InformedEntity]]:
         pk = request.path_params["pk"]
         user_id = _current_user_id(request)
@@ -644,7 +658,7 @@ class InformedEntityAdmin(ModelView, model=InformedEntity):
         await super().delete_model(request, pk)
 
 
-class TrackerRuleAdmin(ModelView, model=TrackerRule):
+class TrackerRuleAdmin(ScopedModelView, model=TrackerRule):
     column_list: ClassVar[list] = [
         "tracker",
         TrackerRule.trip_id,
@@ -658,6 +672,11 @@ class TrackerRuleAdmin(ModelView, model=TrackerRule):
         TrackerRule.start_time,
         TrackerRule.end_time,
     ]
+    column_formatters: ClassVar[dict] = {
+        TrackerRule.trip_id: (
+            lambda m, a: _link(f"/tracker-rule/edit/{m.id}", m.trip_id)
+        ),
+    }
     column_searchable_list: ClassVar[list] = [TrackerRule.trip_id]
     form_excluded_columns: ClassVar[list] = ["tracker"]
     name = "Tracker Rule"
@@ -696,12 +715,6 @@ class TrackerRuleAdmin(ModelView, model=TrackerRule):
             select(func.count(TrackerRule.id))
             .join(Tracker, TrackerRule.tracker_id == Tracker.id)
             .where(Tracker.feed_id.in_(accessible_feed_ids(user_id)))
-        )
-
-    def details_query(self, request: Request) -> Select[tuple[TrackerRule]]:
-        pk = request.path_params["pk"]
-        return self._base_query(_current_user_id(request)).where(
-            TrackerRule.id == int(pk)
         )
 
     def form_edit_query(self, request: Request) -> Select[tuple[TrackerRule]]:

@@ -72,6 +72,19 @@ There are two separate FastAPI apps sharing the same DB/Redis:
 
 The current user id flows via `request.session["user_id"]` and via `current_user_id_var` (`ContextVar`) for use in `scaffold_form`, where `request` is unavailable. The ContextVar is set inside `authenticate`, not in the middleware — middleware runs *before* authentication, so it would otherwise lag a request behind and hand a switched-over browser the previous user's data.
 
+**There are no details pages.** Every view subclasses `ScopedModelView`, which
+sets `can_view_details = False`, so `/{identity}/details/{pk}` returns 403. The
+edit page is the only page for an object and shows non-editable fields read-only;
+`/feed/edit/{id}` is the hub, linking to the feed's trackers, alerts and people.
+`templates/sqladmin/list.html` is a **fork** of the pinned sqladmin's copy (row
+actions moved right and reduced to delete; relation cells link to `admin:edit`,
+since `admin:details` now 403s) — re-check it whenever the `sqladmin` pin moves.
+
+htmx is vendored at `admin/static/htmx.min.js`, served from `/vendor/htmx.min.js`
+and loaded once in `base.html`. Do not add per-template CDN `<script>` tags: a
+page that forgets one leaves its panels reading "Loading…" forever, which is
+exactly how the sharing UI shipped broken.
+
 `admin/entity_router.py` holds the routes that sit **outside** SQLAdmin (sharing, account linking, htmx partials). Nothing runs `authenticate` for them, so they take the proxy header as authoritative and fall back to user id `0` — never to the session cookie, which may belong to whoever used the browser last. They are registered *before* `Admin` mounts at `/`, or the mount swallows them.
 
 ## Redis Data Format
@@ -141,6 +154,8 @@ curl -H "X-Auth-Request-User: alice" -H "Authorization: Bearer $TOKEN" http://lo
 - Never create a stop_time with null departure and arrival
 - Admin views must always scope queries through `accessible_feed_ids` — never expose a Feed or Tracker the caller neither owns nor is a member of
 - Never add a relationship to `Feed` without also excluding it from `FeedAdmin.form_excluded_columns`. WTForms walks every attribute and lazy-loads it on a detached instance, which raises `DetachedInstanceError` and breaks the edit form. This has now happened twice (`members`, `invites`)
+- Anything a `*_edit.html` template touches must be eager-loaded in that view's `form_edit_query`. SQLAdmin's `_run_query` closes its session before rendering, so a bare relationship access is a `DetachedInstanceError`, not a slow query
+- Never interpolate model text into `Markup(...)` in a `column_formatters` lambda — use `_link()` or `escape()`. `nickname`, `header_text` and `trip_id` are free text and `Tracker.id` is caller-supplied, so unescaped interpolation is stored XSS against everyone a feed is shared with
 - Never match an invite or link two accounts on an **unverified** email — that is an account-takeover primitive
 - Use `uv` for all package management (never `pip install` directly)
 - Run `uv run ruff check src/` before committing

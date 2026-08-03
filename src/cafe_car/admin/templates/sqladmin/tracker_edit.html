@@ -1,0 +1,75 @@
+{# The tracker's only page. `id` is not editable after creation (it is baked into
+   the Traccar device, the tracker_rule FK and the Redis keys), so it is shown
+   read-only here rather than on a separate details page. #}
+{% extends "sqladmin/edit.html" %}
+
+{% block content_header %}
+<div class="row g-2 align-items-center">
+  <div class="col">
+    <h2 class="page-title">{{ obj.nickname }}</h2>
+    <div class="page-pretitle">Tracker</div>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+{{ super() }}
+
+<div class="col-12">
+  <div class="card mt-3">
+    <div class="card-header"><h3 class="card-title">Traccar Provisioning</h3></div>
+    <div class="card-body">
+      <div class="mb-3">
+        <label class="form-label">Tracker ID</label>
+        <input type="text" class="form-control font-monospace" value="{{ obj.id }}" readonly>
+        <small class="form-hint text-danger">
+          This is the device's only credential — there is no password. Treat it
+          like one: anyone holding it can post positions as this vehicle. It is
+          never shown in the public feed, which uses the nickname instead.
+        </small>
+      </div>
+      <div hx-get="/tracker/{{ obj.id }}/provisioning-partial"
+           hx-trigger="load"
+           hx-swap="outerHTML">
+        <span class="text-muted">Loading&hellip;</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="col-12">
+  <div class="card mt-3">
+    <div class="card-header">
+      <h3 class="card-title">Rules</h3>
+      <div class="ms-auto"><a href="/tracker-rule/create" class="btn btn-sm btn-primary">+ New Rule</a></div>
+    </div>
+    <div class="card-body">
+      {% if obj.rules %}
+      <table class="table table-sm table-vcenter mb-0">
+        <thead><tr><th>Trip</th><th>Days</th><th>Window</th></tr></thead>
+        <tbody>
+          {% for rule in obj.rules %}
+          <tr>
+            <td><a href="/tracker-rule/edit/{{ rule.id }}">{{ rule.trip_id }}</a></td>
+            <td class="text-muted">
+              {%- set days = [] -%}
+              {%- for label, on in [("Mon", rule.monday), ("Tue", rule.tuesday),
+                                    ("Wed", rule.wednesday), ("Thu", rule.thursday),
+                                    ("Fri", rule.friday), ("Sat", rule.saturday),
+                                    ("Sun", rule.sunday)] -%}
+                {%- if on %}{{ days.append(label) or "" }}{% endif -%}
+              {%- endfor -%}
+              {{ days | join(", ") or "—" }}
+            </td>
+            <td class="text-muted">{{ rule.start_time }}&ndash;{{ rule.end_time }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="text-muted mb-0">No rules yet.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -32,6 +32,7 @@
   <script type="text/javascript" src="{{ url_for('admin:statics', path='js/select2.full.min.js') }}"></script>
   <script type="text/javascript" src="{{ url_for('admin:statics', path='js/flatpickr.min.js') }}"></script>
   <script type="text/javascript" src="{{ url_for('admin:statics', path='js/main.js') }}"></script>
+  <script type="text/javascript" src="/vendor/htmx.min.js"></script>
   {% block tail %}
   {% endblock %}
   <script>
@@ -113,10 +114,23 @@
       });
     }
 
+    // htmx refuses to swap non-2xx responses, so a 403 from one of the panel
+    // routes would otherwise leave the placeholder reading "Loading…" forever
+    // with the real reason only visible in the console. Swap it in instead.
+    function allowForbiddenSwaps() {
+      document.body.addEventListener("htmx:beforeSwap", function (e) {
+        if (e.detail.xhr.status === 403) {
+          e.detail.shouldSwap = true;
+          e.detail.isError = false;
+        }
+      });
+    }
+
     document.addEventListener("DOMContentLoaded", function () {
       initDatetimeInputs();
       attachFormSubmit();
       initUtcTimeElements();
+      allowForbiddenSwaps();
     });
   })();
   </script>
