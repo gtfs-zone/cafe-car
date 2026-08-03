@@ -13,10 +13,10 @@ under `tracker_id == <tracker.id>` for its positions to appear in the feed.
 The script is idempotent: re-running with the same `--feed-name`/`--nickname`
 reuses the existing rows and Traccar device rather than duplicating them.
 
-`db` and `traccar` hostnames resolve only inside the compose network, so run it
-in the api container:
+The final Docker image doesn't include `scripts/` or `uv`, so run this from a
+host checkout against the published ports instead of `docker compose exec`:
 
-    docker compose exec api uv run scripts/provision_source.py \\
+    cd cafe-car && uv run python scripts/provision_source.py \\
         --feed-name amtrak --static-feed-url https://example.com/amtrak.zip \\
         --nickname "Amtrak NE Regional"
 
@@ -25,9 +25,10 @@ explicit trip_id, e.g. hell-gate-bridge — but used by real Traccar devices):
 
     ... --rule mon-fri=08:00-17:00=AMTK123 --rule sat,sun=10:00-14:00=AMTK199
 
-The owner defaults to the fixtured Dex user `alice@local`; that `User` row only
-exists after they have logged into the admin at least once (users are created
-lazily on first authenticated request).
+The owner defaults to `alice@local`, looked up by `User.primary_email`; that
+`User` row only exists after she has logged into the admin at least once
+(users are created lazily on first authenticated request, one per identity
+provider they've never used before — see `railroad_club.models.identity`).
 """
 
 from __future__ import annotations
@@ -40,13 +41,13 @@ from typing import TYPE_CHECKING
 
 import httpx
 from railroad_club.models.feed import Feed
+from railroad_club.models.identity import Identity
 from railroad_club.models.tracker import Tracker
 from railroad_club.models.tracker_rule import TrackerRule
 from railroad_club.models.user import User
 from sqlmodel import delete, select
 
 from cafe_car.database import get_session_factory
-from cafe_car.settings import get_settings
 from cafe_car.traccar import get_traccar_client
 
 if TYPE_CHECKING:
@@ -151,19 +152,19 @@ async def _find_owner(
     session: AsyncSession, provider: str, email: str, subject: str | None
 ) -> User:
     if subject is not None:
-        stmt = select(User).where(
-            User.provider == provider, User.provider_subject == subject
+        stmt = select(User).join(Identity, Identity.user_id == User.id).where(
+            Identity.provider == provider, Identity.provider_subject == subject
         )
-        who = f"provider_subject={subject!r}"
+        who = f"identity provider={provider!r} subject={subject!r}"
     else:
-        stmt = select(User).where(User.provider == provider, User.email == email)
-        who = f"email={email!r}"
+        stmt = select(User).where(User.primary_email == email)
+        who = f"primary_email={email!r}"
     owner = await session.scalar(stmt)
     if owner is None:
         raise ProvisionError(
-            f"No {provider!r} User with {who}. Log into the admin as that Dex user "
-            "once (users are created lazily on first login), or pass --owner-subject "
-            "for a user that already exists."
+            f"No User with {who}. Log into the admin as that user once (users "
+            "are created lazily on first login), or pass --owner-subject for a "
+            "user that already exists under a different email."
         )
     return owner
 
@@ -240,13 +241,11 @@ async def _replace_rules(
 
 
 async def provision(args: argparse.Namespace) -> int:
-    settings = get_settings()
-    provider = settings.oidc_provider
     factory = get_session_factory()
 
     async with factory() as session:
         owner = await _find_owner(
-            session, provider, args.owner_email, args.owner_subject
+            session, args.owner_provider, args.owner_email, args.owner_subject
         )
         feed = await _upsert_feed(
             session,
@@ -314,7 +313,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--owner-subject",
-        help="Owner lookup by User.provider_subject (overrides --owner-email)",
+        help="Owner lookup by Identity.provider_subject (overrides --owner-email)",
+    )
+    parser.add_argument(
+        "--owner-provider",
+        default="keycloak",
+        help="Identity.provider to match --owner-subject against (default: keycloak)",
     )
     parser.add_argument(
         "--rule",
