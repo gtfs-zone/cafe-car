@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
+from google.protobuf import json_format
 from google.transit import gtfs_realtime_pb2
 from railroad_club.models.feed import Feed
 from railroad_club.models.service_alert import ServiceAlert
@@ -17,6 +18,7 @@ from cafe_car.database import get_session
 router = APIRouter()
 
 PROTOBUF_CONTENT_TYPE = "application/x-protobuf"
+JSON_CONTENT_TYPE = "application/json"
 
 
 def _public_vehicle_id(
@@ -56,12 +58,9 @@ async def get_feed(
     return feed
 
 
-@router.get("/{feed_name}/trip_updates.pb")
-async def trip_updates(
-    request: Request,
-    feed: Feed = Depends(get_feed),  # noqa: B008
-    session: AsyncSession = Depends(get_session),  # noqa: B008
-) -> Response:
+async def _build_trip_updates_feed(
+    feed: Feed, session: AsyncSession, redis: object
+) -> gtfs_realtime_pb2.FeedMessage:
     msg = gtfs_realtime_pb2.FeedMessage()
     msg.header.gtfs_realtime_version = "2.0"
     msg.header.incrementality = gtfs_realtime_pb2.FeedHeader.FULL_DATASET
@@ -71,8 +70,6 @@ async def trip_updates(
 
     result = await session.exec(select(Tracker).where(Tracker.feed_id == feed.id))
     trackers = result.all()
-
-    redis = request.app.state.redis
 
     # A >24h daily trip has several instances of the same trip_id live at once,
     # distinguished by start_date — so dedup on the pair, not trip_id alone.
@@ -119,7 +116,29 @@ async def trip_updates(
                 stu = entity.trip_update.stop_time_update.add()
                 _fill_stop_time_update(stu, update)
 
+    return msg
+
+
+@router.get("/{feed_name}/trip_updates.pb")
+async def trip_updates(
+    request: Request,
+    feed: Feed = Depends(get_feed),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> Response:
+    msg = await _build_trip_updates_feed(feed, session, request.app.state.redis)
     return Response(content=msg.SerializeToString(), media_type=PROTOBUF_CONTENT_TYPE)
+
+
+@router.get("/{feed_name}/trip_updates.json")
+async def trip_updates_json(
+    request: Request,
+    feed: Feed = Depends(get_feed),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> Response:
+    msg = await _build_trip_updates_feed(feed, session, request.app.state.redis)
+    return Response(
+        content=json_format.MessageToJson(msg), media_type=JSON_CONTENT_TYPE
+    )
 
 
 _SR_ENUM = gtfs_realtime_pb2.TripUpdate.StopTimeUpdate
@@ -161,12 +180,9 @@ def _fill_stop_time_update(stu: object, update: dict) -> None:
     stu.schedule_relationship = _SR_ENUM.Value(sr) if sr else _SR_ENUM.SCHEDULED
 
 
-@router.get("/{feed_name}/vehicle_positions.pb")
-async def vehicle_positions(
-    request: Request,
-    feed: Feed = Depends(get_feed),  # noqa: B008
-    session: AsyncSession = Depends(get_session),  # noqa: B008
-) -> Response:
+async def _build_vehicle_positions_feed(
+    feed: Feed, session: AsyncSession, redis: object
+) -> gtfs_realtime_pb2.FeedMessage:
     msg = gtfs_realtime_pb2.FeedMessage()
     msg.header.gtfs_realtime_version = "2.0"
     msg.header.incrementality = gtfs_realtime_pb2.FeedHeader.FULL_DATASET
@@ -176,8 +192,6 @@ async def vehicle_positions(
 
     result = await session.exec(select(Tracker).where(Tracker.feed_id == feed.id))
     trackers = result.all()
-
-    redis = request.app.state.redis
 
     for tracker in trackers:
         async for key in redis.scan_iter(f"vehicle:{tracker.id}:*"):
@@ -249,14 +263,34 @@ async def vehicle_positions(
                     )
             entity.vehicle.timestamp = data["timestamp"]
 
-    return Response(content=msg.SerializeToString(), media_type=PROTOBUF_CONTENT_TYPE)
+    return msg
 
 
-@router.get("/{feed_name}/service_alerts.pb")
-async def service_alerts(
+@router.get("/{feed_name}/vehicle_positions.pb")
+async def vehicle_positions(
+    request: Request,
     feed: Feed = Depends(get_feed),  # noqa: B008
     session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> Response:
+    msg = await _build_vehicle_positions_feed(feed, session, request.app.state.redis)
+    return Response(content=msg.SerializeToString(), media_type=PROTOBUF_CONTENT_TYPE)
+
+
+@router.get("/{feed_name}/vehicle_positions.json")
+async def vehicle_positions_json(
+    request: Request,
+    feed: Feed = Depends(get_feed),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> Response:
+    msg = await _build_vehicle_positions_feed(feed, session, request.app.state.redis)
+    return Response(
+        content=json_format.MessageToJson(msg), media_type=JSON_CONTENT_TYPE
+    )
+
+
+async def _build_service_alerts_feed(
+    feed: Feed, session: AsyncSession
+) -> gtfs_realtime_pb2.FeedMessage:
     now = datetime.now(UTC)
 
     result = await session.exec(
@@ -328,4 +362,24 @@ async def service_alerts(
         if alert.url:
             pb_alert.url.translation.add(text=alert.url, language="")
 
+    return msg
+
+
+@router.get("/{feed_name}/service_alerts.pb")
+async def service_alerts(
+    feed: Feed = Depends(get_feed),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> Response:
+    msg = await _build_service_alerts_feed(feed, session)
     return Response(content=msg.SerializeToString(), media_type=PROTOBUF_CONTENT_TYPE)
+
+
+@router.get("/{feed_name}/service_alerts.json")
+async def service_alerts_json(
+    feed: Feed = Depends(get_feed),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> Response:
+    msg = await _build_service_alerts_feed(feed, session)
+    return Response(
+        content=json_format.MessageToJson(msg), media_type=JSON_CONTENT_TYPE
+    )
