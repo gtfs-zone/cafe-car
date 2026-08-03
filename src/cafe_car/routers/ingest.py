@@ -11,14 +11,52 @@ from __future__ import annotations
 
 import json
 import secrets
-from typing import Literal
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Literal
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, model_validator
+from railroad_club.models.informed_entity import InformedEntity
+from railroad_club.models.service_alert import ServiceAlert
+from railroad_club.models.tracker import Tracker
+from sqlmodel import delete, select
 
+from cafe_car.database import get_session
 from cafe_car.settings import get_settings
 
+if TYPE_CHECKING:
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
 router = APIRouter()
+
+AlertCause = Literal[
+    "UNKNOWN_CAUSE",
+    "OTHER_CAUSE",
+    "TECHNICAL_PROBLEM",
+    "STRIKE",
+    "DEMONSTRATION",
+    "ACCIDENT",
+    "HOLIDAY",
+    "WEATHER",
+    "MAINTENANCE",
+    "CONSTRUCTION",
+    "POLICE_ACTIVITY",
+    "MEDICAL_EMERGENCY",
+]
+AlertEffect = Literal[
+    "NO_SERVICE",
+    "REDUCED_SERVICE",
+    "SIGNIFICANT_DELAYS",
+    "DETOUR",
+    "ADDITIONAL_SERVICE",
+    "MODIFIED_SERVICE",
+    "OTHER_EFFECT",
+    "UNKNOWN_EFFECT",
+    "STOP_MOVED",
+    "NO_EFFECT",
+    "ACCESSIBILITY_ISSUE",
+]
+AlertSeverity = Literal["UNKNOWN_SEVERITY", "INFO", "WARNING", "SEVERE"]
 
 # GTFS-RT VehicleStopStatus, by name. Every one of them names a stop — the
 # vehicle is approaching, sitting at, or heading to *that* stop — so a status is
@@ -102,6 +140,49 @@ class TripUpdateIngest(BaseModel):
     timestamp: int  # epoch seconds
     stop_time_updates: list[StopTimeUpdateIngest]
     start_date: str | None = None  # see PositionIngest.start_date
+
+
+class AlertEntityIngest(BaseModel):
+    agency_id: str | None = None
+    route_id: str | None = None
+    stop_id: str | None = None
+
+    @model_validator(mode="after")
+    def _has_specifier(self) -> AlertEntityIngest:
+        if not (self.agency_id or self.route_id or self.stop_id):
+            raise ValueError(
+                "an alert entity needs at least one of agency_id/route_id/stop_id"
+            )
+        return self
+
+
+class AlertIngest(BaseModel):
+    header_text: str
+    description_text: str
+    url: str | None = None
+    # Restricted to the exact GTFS-RT enum names — gtfs_rt.py's
+    # service_alerts serialiser calls Alert.Cause/Effect/SeverityLevel.Value()
+    # on these at feed-build time, so an invalid string would 500 the feed
+    # instead of failing fast here at ingest.
+    cause: AlertCause | None = None
+    effect: AlertEffect | None = None
+    severity_level: AlertSeverity | None = None
+    active_period_start: int | None = None  # epoch seconds
+    active_period_end: int | None = None  # epoch seconds
+    entities: list[AlertEntityIngest]
+
+    @model_validator(mode="after")
+    def _has_entity(self) -> AlertIngest:
+        if not self.entities:
+            raise ValueError("an alert needs at least one informed entity")
+        return self
+
+
+class AlertsSyncIngest(BaseModel):
+    # Same secret tracker credential as position/trip-update ingest; resolved
+    # to a feed_id server-side so the producer never needs to know it.
+    tracker_id: str
+    alerts: list[AlertIngest]
 
 
 def _vehicle_key(tracker_id: str, trip_id: str, start_date: str | None) -> str:
@@ -199,3 +280,69 @@ async def ingest_trip_update(
     key = _trip_update_key(body.trip_id, body.start_date)
     await request.app.state.redis.setex(key, TRIP_UPDATE_TTL, json.dumps(record))
     return {"status": "ok"}
+
+
+@router.post("/ingest/alerts")
+async def ingest_alerts(
+    body: AlertsSyncIngest,
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> dict[str, str | int]:
+    _check_auth(authorization)
+
+    tracker = await session.get(Tracker, body.tracker_id)
+    if tracker is None:
+        raise HTTPException(status_code=403, detail="Invalid ingest token")
+    feed_id = tracker.feed_id
+
+    # Full replace: each sync carries the producer's complete current alert
+    # set, so a stale alert (removed upstream) is cleared automatically on
+    # the next cycle rather than needing separate expiry logic. No DB-level
+    # cascade exists on the FK, so entities must be deleted before alerts.
+    existing_ids = (
+        await session.exec(
+            select(ServiceAlert.id).where(ServiceAlert.feed_id == feed_id)
+        )
+    ).all()
+    if existing_ids:
+        await session.exec(
+            delete(InformedEntity).where(
+                InformedEntity.service_alert_id.in_(existing_ids)  # type: ignore[union-attr]
+            )
+        )
+        await session.exec(delete(ServiceAlert).where(ServiceAlert.feed_id == feed_id))
+
+    for alert_in in body.alerts:
+        alert = ServiceAlert(
+            feed_id=feed_id,
+            header_text=alert_in.header_text,
+            description_text=alert_in.description_text,
+            url=alert_in.url,
+            cause=alert_in.cause,
+            effect=alert_in.effect,
+            severity_level=alert_in.severity_level,
+            active_period_start=(
+                datetime.fromtimestamp(alert_in.active_period_start, tz=UTC)
+                if alert_in.active_period_start is not None
+                else None
+            ),
+            active_period_end=(
+                datetime.fromtimestamp(alert_in.active_period_end, tz=UTC)
+                if alert_in.active_period_end is not None
+                else None
+            ),
+        )
+        session.add(alert)
+        await session.flush()  # populate alert.id for the entities below
+        for entity_in in alert_in.entities:
+            session.add(
+                InformedEntity(
+                    service_alert_id=alert.id,
+                    agency_id=entity_in.agency_id,
+                    route_id=entity_in.route_id,
+                    stop_id=entity_in.stop_id,
+                )
+            )
+
+    await session.commit()
+    return {"status": "ok", "count": len(body.alerts)}
