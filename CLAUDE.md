@@ -3,10 +3,10 @@
 ## Project Overview
 
 FastAPI service that:
-- Sits behind oauth2-proxy forward auth (Traefik middleware) using Dex as the OIDC provider (GitHub OAuth)
+- Sits behind oauth2-proxy forward auth (Traefik middleware) using Keycloak as the OIDC provider, which brokers GitHub / Google / GitLab
 - Manages config data (Feeds, Trackers) in PostgreSQL via SQLModel + Alembic
 - Exposes GTFS-RT protobuf endpoints (`/<feed_name>/*.pb`) for trip updates, vehicle positions, and service alerts
-- Provides a scoped SQLAdmin interface at `/admin` where every authenticated user can only see their own Feeds and associated Trackers
+- Provides a scoped SQLAdmin interface at `/admin` where a user sees only the Feeds they own or have been given access to, and the Trackers beneath them
 
 ## Commands
 
@@ -27,8 +27,8 @@ uv run pytest tests/test_foo.py::test_bar  # single test
 ## Architecture
 
 ```
-GitHub OAuth
-    └─> Dex (OIDC provider, dex.gtfs.zone)
+GitHub / Google / GitLab OAuth
+    └─> Keycloak (OIDC provider, brokers the above; links them to one account)
             └─> oauth2-proxy (ForwardAuth middleware, auth.gtfs.zone)
                     └─> Traefik
                             ├─> FastAPI admin app (manage.rt.gtfs.zone) — protected by oauth2-proxy
@@ -40,11 +40,17 @@ GitHub OAuth
 ## Authentication
 
 oauth2-proxy injects headers on every authenticated request to the admin interface:
-- `X-Auth-Request-User` — OIDC `sub` claim (GitHub username); used as primary identity
+- `X-Auth-Request-User` — OIDC `sub` claim (a Keycloak UUID); identifies the credential
 - `X-Auth-Request-Email` — email address
 - `X-Auth-Request-Access-Token` — OIDC access token
 
-No passwords are stored for web users — Dex/GitHub owns credentials. The `User` record is auto-created on first request using `(provider="dex", provider_subject=<X-Auth-Request-User>)` as the lookup key.
+No passwords are stored for web users — Keycloak owns credentials, and brokers GitHub/Google/GitLab behind them.
+
+**A person is not a credential.** `User` is the principal that everything else (feeds, memberships) points at; `Identity` is one row per `(provider, provider_subject)` pair, many-to-one back to `User`. Signing in with GitHub and with Google gives one user and two identities. `cafe_car/accounts.py::resolve_login` resolves a login to a `User`, creating both rows the first time a credential is seen.
+
+Every scoped query filters on `user_id`, never on the raw header. `request.session["user_id"]` and `current_user_id_var` carry it; `subject` is kept for display only. `cafe_car/admin/access.py::accessible_feed_ids` is the single definition of "may touch this feed" (owner **or** member) — trackers, tracker rules, alerts and informed entities all scope through it.
+
+A new credential whose *verified* email already belongs to another user never merges silently. It gets its own principal, and `/account` offers the merge, which the user confirms. `merge_users` is in `accounts.py`.
 
 The public GTFS-RT endpoints (`rt.gtfs.zone`) have **no authentication middleware** — they are publicly accessible.
 
@@ -64,7 +70,9 @@ There are two separate FastAPI apps sharing the same DB/Redis:
 - `src/app/main.py` → **public API** (`app = create_public_app()`): GTFS-RT protobuf endpoints (`/{feed_name}/trip_updates.pb`, `vehicle_positions.pb`, `service_alerts.pb`) + the HTTP ingest seam (`POST /ingest/position`, `POST /ingest/trip-update`). Run with `uv run fastapi dev src/app/main.py`.
 - `src/app/admin_main.py` → **admin app** (`app = create_admin_app()`): SQLAdmin interface mounted at `/`. Uses `OIDCAuthBackend`, `SessionMiddleware`, `DBSessionMiddleware`, and `SubjectMiddleware`. Run with `uv run fastapi dev src/app/admin_main.py`.
 
-The current user identity flows via `request.session["subject"]` (set in `OIDCAuthBackend.authenticate`) and also via `current_subject_var` (`ContextVar`) for use in `TrackerAdmin.scaffold_form` where `request` is unavailable.
+The current user id flows via `request.session["user_id"]` and via `current_user_id_var` (`ContextVar`) for use in `scaffold_form`, where `request` is unavailable. The ContextVar is set inside `authenticate`, not in the middleware — middleware runs *before* authentication, so it would otherwise lag a request behind and hand a switched-over browser the previous user's data.
+
+`admin/entity_router.py` holds the routes that sit **outside** SQLAdmin (sharing, account linking, htmx partials). Nothing runs `authenticate` for them, so they take the proxy header as authoritative and fall back to user id `0` — never to the session cookie, which may belong to whoever used the browser last. They are registered *before* `Admin` mounts at `/`, or the mount swallows them.
 
 ## Redis Data Format
 
@@ -106,6 +114,16 @@ curl -H "X-Auth-Request-User: alice" -H "X-Auth-Request-Email: alice@example.com
      http://localhost:8000/admin
 ```
 
+`X-Auth-Request-User` is the OIDC subject and is the only thing that identifies the caller — the header alone creates the `User` and `Identity` on first use. To simulate a *verified* email (needed for invite claiming and account linking, both of which refuse unverified addresses), set `DEBUG=true` and pass an unsigned JWT whose `sub` matches the header:
+
+```bash
+TOKEN=$(python3 -c "
+import base64, json
+b64 = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip('=')
+print(b64({'alg':'none'}) + '.' + b64({'sub':'alice','email':'alice@example.com','email_verified':True}) + '.x')")
+curl -H "X-Auth-Request-User: alice" -H "Authorization: Bearer $TOKEN" http://localhost:8000/account
+```
+
 ## Environment Variables
 
 | Variable | Description |
@@ -113,13 +131,17 @@ curl -H "X-Auth-Request-User: alice" -H "X-Auth-Request-Email: alice@example.com
 | `DATABASE_URL` | PostgreSQL connection string, e.g. `postgresql+asyncpg://postgres:password@localhost:5432/cafe-car` |
 | `REDIS_URL` | Redis connection string, e.g. `redis://localhost:6379/1` |
 | `SESSION_SECRET_KEY` | Secret key for signing sessions |
+| `OIDC_PROVIDER` | Namespaces an `Identity`'s `provider_subject`. Defaults to `keycloak` |
+| `KEYCLOAK_ACCOUNT_URL` | Keycloak's Account Console, linked from `/account`. Empty hides the link |
 
 ## Rules
 
 - Never include `Co-Authored-By: Claude ...` trailers in commit messages.
 - Do not use Playwright / the browser automation tools. The user tests UI changes manually.
 - Never create a stop_time with null departure and arrival
-- Admin views must always scope queries to the authenticated user — never expose another user's Feeds or Trackers
+- Admin views must always scope queries through `accessible_feed_ids` — never expose a Feed or Tracker the caller neither owns nor is a member of
+- Never add a relationship to `Feed` without also excluding it from `FeedAdmin.form_excluded_columns`. WTForms walks every attribute and lazy-loads it on a detached instance, which raises `DetachedInstanceError` and breaks the edit form. This has now happened twice (`members`, `invites`)
+- Never match an invite or link two accounts on an **unverified** email — that is an account-takeover primitive
 - Use `uv` for all package management (never `pip install` directly)
 - Run `uv run ruff check src/` before committing
 
