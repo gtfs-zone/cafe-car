@@ -159,6 +159,10 @@ class FeedAdmin(ModelView, model=Feed):
         # form widget. Leaving it in also makes WTForms touch the relationship
         # on a detached instance, which raises DetachedInstanceError.
         "members",
+        # Same again for pending invites: WTForms' process() calls hasattr()
+        # across every attribute, which lazy-loads this one on a detached
+        # instance and blows up the edit form.
+        "invites",
     ]
     name = "Feed"
     name_plural = "Feeds"
