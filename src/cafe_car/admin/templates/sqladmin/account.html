@@ -40,16 +40,24 @@
         <table class="table table-vcenter table-bordered table-sm">
           <thead>
             <tr>
-              <th>Provider</th>
+              <th>Signed in with</th>
               <th>Email</th>
               <th>Verified</th>
               <th>First seen</th>
+              <th>Last used</th>
+              <th>Subject</th>
             </tr>
           </thead>
           <tbody>
             {% for identity in identities %}
             <tr>
-              <td>{{ identity.provider }}</td>
+              <td>
+                {{ broker_labels.get(identity.broker_alias, identity.broker_alias)
+                   if identity.broker_alias else "Direct" }}
+                {% if identity.provider_subject == subject %}
+                <span class="badge bg-blue ms-1">this session</span>
+                {% endif %}
+              </td>
               <td>{{ identity.email or "—" }}</td>
               <td>
                 {% if identity.email_verified %}
@@ -65,11 +73,32 @@
                 </time>
                 {% else %}—{% endif %}
               </td>
+              <td>
+                {% if identity.last_seen_at %}
+                <time data-utc="{{ identity.last_seen_at.isoformat() }}">
+                  {{ identity.last_seen_at.isoformat() }}
+                </time>
+                {% else %}—{% endif %}
+              </td>
+              <td>
+                <code title="{{ identity.provider_subject }}">
+                  {{ identity.provider_subject | truncate(12, true, "…") }}
+                </code>
+              </td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
+
+      {% if identities | rejectattr("email_verified") | list %}
+      <p class="text-warning">
+        One of these addresses is unverified. A feed shared with an unverified
+        address cannot reach you &mdash; the invitation stays pending until
+        your identity provider vouches for the address, and account linking
+        will not offer it either.
+      </p>
+      {% endif %}
       {% else %}
       <p class="text-muted">No sign-in methods recorded yet.</p>
       {% endif %}
@@ -77,7 +106,8 @@
       <p class="text-muted mb-0">
         This is what this site has actually seen you sign in with, not a live
         view of your identity provider. A provider you link elsewhere appears
-        here the first time you use it to sign in.
+        here the first time you use it to sign in. &ldquo;Subject&rdquo; is the
+        id your provider gave the credential, and is what identifies you here.
       </p>
     </div>
   </div>

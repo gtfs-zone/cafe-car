@@ -99,8 +99,14 @@ async def share_feed(
     )
     await session.commit()
     logger.info("share_feed: invited %s to feed=%s", email, feed.id)
+    # Not "the next time they sign in": an invite is matched on a *verified*
+    # address, so someone whose provider never vouched for theirs can sign in
+    # repeatedly and never receive this. Say what actually has to happen. The
+    # wording deliberately does not distinguish "no such account" from "account
+    # exists but is unverified" — that would tell any feed owner whether an
+    # address is registered here.
     return ShareResult(
-        "invited", f"{email} will get access the next time they sign in."
+        "invited", f"{email} will get access once they sign in with a verified {email}."
     )
 
 

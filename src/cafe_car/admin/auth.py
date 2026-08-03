@@ -72,6 +72,11 @@ class OIDCAuthBackend(AuthenticationBackend):
             # Account linking keys off this, so it must not be generous.
             email_verified = bool(claims.get("email_verified") and claims.get("email"))
             display_name = (claims.get("name") or "")[:128].strip() or None
+            # Which upstream provider Keycloak brokered this session through,
+            # from a user-session-note mapper on the client. A direct realm
+            # login has no such note, so the claim is simply absent. Display
+            # only — `provider_subject` is still what identifies the caller.
+            broker_alias = (claims.get("identity_provider") or "")[:64].strip() or None
 
             factory = get_session_factory()
             async with factory() as session:
@@ -82,6 +87,7 @@ class OIDCAuthBackend(AuthenticationBackend):
                     email=email,
                     email_verified=email_verified,
                     display_name=display_name,
+                    broker_alias=broker_alias,
                 )
                 if link_candidate_id is not None:
                     # Two principals, one human. Keycloak's first-broker-login

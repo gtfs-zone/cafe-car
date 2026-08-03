@@ -9,6 +9,7 @@ user — which is the entire point of the split.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, NamedTuple
 
 from railroad_club.models.feed import Feed
@@ -23,6 +24,11 @@ if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+# How stale ``Identity.last_seen_at`` is allowed to get before a login rewrites
+# it. The column exists to tell a live credential from a dormant one, and no
+# question that answers needs the resolution finer than this.
+_LAST_SEEN_GRAIN = timedelta(minutes=15)
 
 
 class LoginResult(NamedTuple):
@@ -71,6 +77,7 @@ async def resolve_login(
     email: str | None = None,
     email_verified: bool = False,
     display_name: str | None = None,
+    broker_alias: str | None = None,
 ) -> LoginResult:
     """Return the :class:`User` for this login, creating one if needed.
 
@@ -91,6 +98,7 @@ async def resolve_login(
             email=email,
             email_verified=email_verified,
             display_name=display_name,
+            broker_alias=broker_alias,
         )
         await session.commit()
         return LoginResult(user)
@@ -113,6 +121,18 @@ async def resolve_login(
             )
 
     logger.info("resolve_login: new identity provider=%s subject=%s", provider, subject)
+    if email and not email_verified:
+        # Worth a warning, not an info: this credential cannot claim a feed
+        # invite, cannot be shared with by address, and cannot be offered as a
+        # link candidate — all of which look like the feature is broken rather
+        # than like the issuer never vouched for the address. A broker with
+        # `trustEmail` off is the usual cause.
+        logger.warning(
+            "resolve_login: new identity subject=%s has unverified email %s — "
+            "invites and account linking will not match it",
+            subject,
+            email,
+        )
     user = User(primary_email=email, display_name=display_name)
     session.add(user)
     await session.flush()
@@ -123,6 +143,8 @@ async def resolve_login(
             provider_subject=subject,
             email=email,
             email_verified=email_verified,
+            broker_alias=broker_alias,
+            last_seen_at=datetime.now(UTC),
         )
     )
     await session.commit()
@@ -274,7 +296,23 @@ def _refresh_profile(
     email: str | None,
     email_verified: bool,
     display_name: str | None,
+    broker_alias: str | None = None,
 ) -> None:
+    # Only ever fills a blank. The claim is absent whenever the issuer did not
+    # bother to send it, and "we were not told this time" is not evidence that
+    # what we were told before was wrong.
+    if broker_alias and not identity.broker_alias:
+        identity.broker_alias = broker_alias
+    now = datetime.now(UTC)
+    seen = identity.last_seen_at
+    # SQLite hands back a naive datetime for a timezone-aware column, so the
+    # subtraction below would raise there rather than in production.
+    if seen is not None and seen.tzinfo is None:
+        seen = seen.replace(tzinfo=UTC)
+    if seen is None or now - seen > _LAST_SEEN_GRAIN:
+        # `authenticate` runs on every request; without the grain this would
+        # turn every page view into a write.
+        identity.last_seen_at = now
     if email and identity.email != email:
         identity.email = email
         # A changed address is unverified until this login says otherwise.

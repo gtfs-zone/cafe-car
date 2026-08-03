@@ -9,6 +9,7 @@ from railroad_club.models.feed_invite import FeedInvite
 from railroad_club.models.feed_member import FeedMember
 from sqlalchemy import select
 
+from cafe_car.accounts import resolve_login
 from cafe_car.sharing import (
     claim_invites,
     list_members,
@@ -18,7 +19,7 @@ from cafe_car.sharing import (
     share_feed,
     transfer_ownership,
 )
-from tests.factories import add_identity, add_member, make_feed, make_user
+from tests.factories import PROVIDER, add_identity, add_member, make_feed, make_user
 
 if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession
@@ -251,6 +252,41 @@ class TestClaimInvites:
         assert await claim_invites(session, newcomer) == 0
         assert await list_members(session, feed.id) == []
         assert len(await list_open_invites(session, feed.id)) == 1
+
+    async def test_an_invite_waits_until_the_address_is_verified(
+        self, session: AsyncSession
+    ) -> None:
+        """The whole shape of the carol@local bug.
+
+        A broker configured without ``trustEmail`` hands over an address it
+        never vouched for. The invite is not lost — it simply waits, and lands
+        the first time the provider does vouch.
+        """
+        owner = await make_user(session, email="owner@example.com")
+        feed = await make_feed(session, owner)
+        await share_feed(session, feed, "later@example.com", added_by_user_id=owner.id)
+        newcomer = await make_user(
+            session, email="later@example.com", subject="kc", verified=False
+        )
+
+        assert await claim_invites(session, newcomer) == 0
+        assert len(await list_open_invites(session, feed.id)) == 1
+
+        # The provider starts vouching for the address; the next sign-in
+        # records that, and the pending invite finally matches.
+        await resolve_login(
+            session,
+            provider=PROVIDER,
+            subject="kc",
+            email="later@example.com",
+            email_verified=True,
+        )
+
+        assert await claim_invites(session, newcomer) == 1
+        assert [m.user_id for m in await list_members(session, feed.id)] == [
+            newcomer.id
+        ]
+        assert await list_open_invites(session, feed.id) == []
 
     async def test_a_second_verified_identity_can_claim(
         self, session: AsyncSession

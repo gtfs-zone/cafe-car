@@ -161,7 +161,7 @@ requires-dist = [
     { name = "railroad-club", git = "https://git.kcfam.us/gtfs.zone/railroad-club.git" },
     { name = "redis", extras = ["asyncio"] },
     { name = "segno" },
-    { name = "sqladmin", extras = ["full"] },
+    { name = "sqladmin", extras = ["full"], specifier = "==0.23.0" },
     { name = "sqlmodel" },
 ]
 
@@ -1099,7 +1099,7 @@ wheels = [
 [[package]]
 name = "railroad-club"
 version = "0.1.0"
-source = { git = "https://git.kcfam.us/gtfs.zone/railroad-club.git#a900a75726481db279c8509c79e8c496be85c095" }
+source = { git = "https://git.kcfam.us/gtfs.zone/railroad-club.git#25d491121bd792fb8976a6258039c61851f53f64" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },

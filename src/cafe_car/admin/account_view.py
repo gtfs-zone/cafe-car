@@ -25,6 +25,16 @@ if TYPE_CHECKING:
     from starlette.responses import Response
 
 
+# What the upstream identity provider is called, for the aliases the brokers
+# are configured under. An unknown alias is shown raw rather than hidden — a
+# provider nobody has labelled yet is still worth seeing.
+BROKER_LABELS = {
+    "github": "GitHub",
+    "google": "Google",
+    "gitlab": "GitLab",
+}
+
+
 class AccountAdmin(BaseView):
     name = "Account"
     icon = "fa-solid fa-user-shield"
@@ -60,5 +70,10 @@ class AccountAdmin(BaseView):
                 "identities": identities,
                 "candidates": candidates,
                 "keycloak_account_url": settings.keycloak_account_url,
+                # Which of the rows is the credential in use right now. Two
+                # principals for one person is the confusing case this page
+                # exists to untangle, and it is the first thing to know.
+                "subject": request.session.get("subject"),
+                "broker_labels": BROKER_LABELS,
             },
         )

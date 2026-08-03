@@ -90,6 +90,70 @@ async def test_changed_address_is_unverified_until_this_login_says_so(
     assert identity.email_verified is False
 
 
+async def test_the_broker_is_recorded_on_a_new_credential(
+    session: AsyncSession,
+) -> None:
+    await resolve_login(
+        session,
+        provider=PROVIDER,
+        subject="fresh",
+        email="fresh@example.com",
+        email_verified=True,
+        broker_alias="github",
+    )
+
+    identity = await session.scalar(
+        select(Identity).where(Identity.provider_subject == "fresh")
+    )
+    assert identity.broker_alias == "github"
+    assert identity.last_seen_at is not None
+
+
+async def test_a_login_without_the_claim_does_not_forget_the_broker(
+    session: AsyncSession,
+) -> None:
+    """The issuer not saying which broker was used is not it saying "none"."""
+    await resolve_login(
+        session,
+        provider=PROVIDER,
+        subject="stable",
+        email="me@example.com",
+        email_verified=True,
+        broker_alias="google",
+    )
+
+    await resolve_login(
+        session,
+        provider=PROVIDER,
+        subject="stable",
+        email="me@example.com",
+        email_verified=True,
+    )
+
+    identity = await session.scalar(
+        select(Identity).where(Identity.provider_subject == "stable")
+    )
+    assert identity.broker_alias == "google"
+
+
+async def test_last_seen_is_stamped_on_a_returning_credential(
+    session: AsyncSession,
+) -> None:
+    user = await make_user(session, email="me@example.com", subject="stable")
+    identity = await session.scalar(
+        select(Identity).where(Identity.provider_subject == "stable")
+    )
+    assert identity.last_seen_at is None  # the factory has never signed in
+
+    await resolve_login(
+        session, provider=PROVIDER, subject="stable", email="me@example.com"
+    )
+
+    await session.refresh(identity)
+    assert identity.last_seen_at is not None
+    assert identity.user_id == user.id
+
+
 async def test_a_verified_email_collision_suggests_a_link_but_does_not_merge(
     session: AsyncSession,
 ) -> None:
