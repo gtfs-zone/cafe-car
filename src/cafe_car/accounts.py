@@ -9,20 +9,58 @@ user — which is the entire point of the split.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from railroad_club.models.feed import Feed
 from railroad_club.models.feed_invite import FeedInvite
 from railroad_club.models.feed_member import FeedMember
 from railroad_club.models.identity import Identity
 from railroad_club.models.user import User
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
 if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+
+class LoginResult(NamedTuple):
+    """Who signed in, and whether they look like someone we already know.
+
+    ``link_candidate_id`` is set only when this login was a brand-new
+    credential whose *verified* address already belongs to another user. It is
+    a suggestion to show them, never an action: merging happens on their
+    explicit confirmation and nowhere else.
+    """
+
+    user: User
+    link_candidate_id: int | None = None
+
+
+async def user_with_verified_email(
+    session: AsyncSession, email: str, *, exclude_user_id: int | None = None
+) -> User | None:
+    """The user who has *proven* this address.
+
+    Only verified identities count. Matching an unverified address would let
+    anyone claim someone else's account by typing their email into a provider
+    that does not check.
+
+    Compared case-insensitively on both sides: unlike ``FeedInvite.email``,
+    ``Identity.email`` is stored exactly as the provider sent it, so the stored
+    value cannot be assumed lowercase. That gives up the index on a table with
+    one row per linked credential, which is not a table that grows.
+    """
+    query = (
+        select(User)
+        .join(Identity, Identity.user_id == User.id)
+        .where(func.lower(Identity.email) == email.strip().lower())
+        .where(Identity.email_verified.is_(True))
+    )
+    if exclude_user_id is not None:
+        query = query.where(User.id != exclude_user_id)
+    return await session.scalar(query.limit(1))
 
 
 async def resolve_login(
@@ -33,7 +71,7 @@ async def resolve_login(
     email: str | None = None,
     email_verified: bool = False,
     display_name: str | None = None,
-) -> User:
+) -> LoginResult:
     """Return the :class:`User` for this login, creating one if needed.
 
     Refreshes the profile fields we were told about, so a changed display name
@@ -55,11 +93,25 @@ async def resolve_login(
             display_name=display_name,
         )
         await session.commit()
-        return user
+        return LoginResult(user)
 
-    # An unseen credential. Phase 6 inserts the "a verified email already
-    # belongs to someone — link instead?" check here; until then a new
-    # credential always means a new person.
+    # An unseen credential. Keycloak's first-broker-login flow normally catches
+    # the "this email already has an account" case upstream and links there, so
+    # reaching here with a known address means the same person exists in
+    # Keycloak twice. Create the new principal regardless — a silent merge on
+    # an email match is exactly the takeover primitive this whole design avoids
+    # — and hand the caller a candidate to offer them.
+    candidate = None
+    if email and email_verified:
+        existing = await user_with_verified_email(session, email)
+        if existing is not None:
+            candidate = existing.id
+            logger.info(
+                "resolve_login: verified email %s already belongs to user=%s",
+                email,
+                candidate,
+            )
+
     logger.info("resolve_login: new identity provider=%s subject=%s", provider, subject)
     user = User(primary_email=email, display_name=display_name)
     session.add(user)
@@ -74,7 +126,38 @@ async def resolve_login(
         )
     )
     await session.commit()
-    return user
+    return LoginResult(user, candidate)
+
+
+async def link_candidates(session: AsyncSession, user_id: int) -> list[User]:
+    """Other users who have proven one of this user's verified addresses.
+
+    Recomputed on every view rather than remembered. ``authenticate`` clears
+    the session on each request, so a stashed suggestion would not survive to
+    be acted on; and a live query is self-healing — once the accounts are
+    merged, or the address stops being verified, the offer simply stops
+    appearing.
+    """
+    emails = (
+        (
+            await session.execute(
+                select(Identity.email).where(
+                    Identity.user_id == user_id,
+                    Identity.email_verified.is_(True),
+                    Identity.email.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    found: dict[int, User] = {}
+    for email in {e.strip().lower() for e in emails if e}:
+        other = await user_with_verified_email(session, email, exclude_user_id=user_id)
+        if other is not None and other.id not in found:
+            found[other.id] = other
+    return list(found.values())
 
 
 def choose_absorber(a: User, b: User) -> tuple[User, User]:

@@ -15,12 +15,14 @@ from typing import TYPE_CHECKING, NamedTuple
 from railroad_club.models.feed_invite import FeedInvite
 from railroad_club.models.feed_member import FeedMember
 from railroad_club.models.identity import Identity
-from railroad_club.models.user import User
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from cafe_car.accounts import user_with_verified_email
+
 if TYPE_CHECKING:
     from railroad_club.models.feed import Feed
+    from railroad_club.models.user import User
     from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -52,20 +54,6 @@ async def list_open_invites(session: AsyncSession, feed_id: int) -> list[FeedInv
     return list(result.scalars().all())
 
 
-async def _user_with_verified_email(session: AsyncSession, email: str) -> User | None:
-    """The user who has *proven* this address.
-
-    Only verified identities count. An unverified match would let anyone claim
-    a share by typing someone else's address into their own provider.
-    """
-    return await session.scalar(
-        select(User)
-        .join(Identity, Identity.user_id == User.id)
-        .where(Identity.email == email, Identity.email_verified.is_(True))
-        .limit(1)
-    )
-
-
 async def share_feed(
     session: AsyncSession, feed: Feed, email: str, *, added_by_user_id: int
 ) -> ShareResult:
@@ -74,7 +62,7 @@ async def share_feed(
     if not email:
         return ShareResult("already", "Enter an email address.")
 
-    user = await _user_with_verified_email(session, email)
+    user = await user_with_verified_email(session, email)
 
     if user is not None and user.id == feed.owner_id:
         return ShareResult("owner", "That is already the owner of this feed.")

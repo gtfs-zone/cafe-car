@@ -75,7 +75,7 @@ class OIDCAuthBackend(AuthenticationBackend):
 
             factory = get_session_factory()
             async with factory() as session:
-                user = await resolve_login(
+                user, link_candidate_id = await resolve_login(
                     session,
                     provider=settings.oidc_provider,
                     subject=subject,
@@ -83,12 +83,25 @@ class OIDCAuthBackend(AuthenticationBackend):
                     email_verified=email_verified,
                     display_name=display_name,
                 )
+                if link_candidate_id is not None:
+                    # Two principals, one human. Keycloak's first-broker-login
+                    # flow normally links these upstream, so reaching here means
+                    # something bypassed it. /account offers the merge; this
+                    # line is so the duplicate is visible in the log even if
+                    # they never take it up.
+                    logger.warning(
+                        "authenticate: new user=%s duplicates user=%s on %s",
+                        user.id,
+                        link_candidate_id,
+                        email,
+                    )
                 # Feeds shared with them before they had an account. Matched on
                 # verified addresses only, inside claim_invites.
                 await claim_invites(session, user)
         except Exception:
             logger.exception("authenticate: DB error for subject=%s", subject)
             raise
+        prior = dict(request.session)
         request.session.clear()
         # Authoritative for this request. SubjectMiddleware primes the var from
         # the session before we get here, which is a request behind: on the
@@ -105,4 +118,9 @@ class OIDCAuthBackend(AuthenticationBackend):
             request.session["display_name"] = user.display_name
         if user.primary_email:
             request.session["email"] = user.primary_email
+        # Carry dismissals across the clear above, but only for the same
+        # person — a browser that switched users must not inherit the previous
+        # one's "don't ask me again".
+        if prior.get("user_id") == user.id and prior.get("link_dismissed"):
+            request.session["link_dismissed"] = prior["link_dismissed"]
         return True
