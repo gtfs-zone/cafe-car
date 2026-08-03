@@ -136,6 +136,36 @@ async def test_a_login_without_the_claim_does_not_forget_the_broker(
     assert identity.broker_alias == "google"
 
 
+async def test_a_login_via_a_different_broker_updates_the_recorded_broker(
+    session: AsyncSession,
+) -> None:
+    """Signing in via a second linked provider is current, positive
+    information — it must replace the stale broker from an earlier login,
+    not be silently discarded in its favor."""
+    await resolve_login(
+        session,
+        provider=PROVIDER,
+        subject="stable",
+        email="me@example.com",
+        email_verified=True,
+        broker_alias="github",
+    )
+
+    await resolve_login(
+        session,
+        provider=PROVIDER,
+        subject="stable",
+        email="me@example.com",
+        email_verified=True,
+        broker_alias="google",
+    )
+
+    identity = await session.scalar(
+        select(Identity).where(Identity.provider_subject == "stable")
+    )
+    assert identity.broker_alias == "google"
+
+
 async def test_last_seen_is_stamped_on_a_returning_credential(
     session: AsyncSession,
 ) -> None:

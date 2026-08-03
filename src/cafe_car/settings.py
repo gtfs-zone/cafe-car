@@ -13,9 +13,20 @@ class Settings(BaseSettings):
     oidc_provider: str = "keycloak"
     oauth2_proxy_logout_url: str = "/oauth2/sign_out"
     # Keycloak's self-serve Account Console, where a signed-in person adds
-    # another provider. Keycloak owns linking; /account only reports what this
-    # app has seen. Empty hides the link.
+    # another provider. Keycloak owns linking, so it is also where linking is
+    # undone. Empty hides the link.
     keycloak_account_url: str = ""
+    # Read-only admin-API access, used by /account to report which upstream
+    # providers are linked to the signed-in person's realm account. Keycloak is
+    # the only place that knows: a login only ever tells us the *one* broker it
+    # came through. A service account rather than the caller's own token, so
+    # this does not depend on how oauth2-proxy passes tokens through. Needs the
+    # realm-management `view-users` role and nothing more. Empty client id
+    # disables the lookup and the page falls back to what it has seen itself.
+    keycloak_url: str = "http://keycloak:8090"
+    keycloak_realm: str = "gtfs"
+    keycloak_client_id: str = ""
+    keycloak_client_secret: str | None = None
     debug: bool = False
     celery_broker_url: str = "redis://redis:6379/3"
     cors_allowed_origins: list[str] = []

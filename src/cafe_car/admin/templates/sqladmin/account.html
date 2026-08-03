@@ -40,7 +40,8 @@
         <table class="table table-vcenter table-bordered table-sm">
           <thead>
             <tr>
-              <th>Signed in with</th>
+              <th>Sign in with</th>
+              <th>Last used with</th>
               <th>Email</th>
               <th>Verified</th>
               <th>First seen</th>
@@ -50,13 +51,28 @@
           </thead>
           <tbody>
             {% for identity in identities %}
-            <tr>
+            {% set is_stale = identity.provider_subject in stale %}
+            <tr {% if is_stale %}class="text-muted"{% endif %}>
               <td>
+                {% if is_stale %}
+                <span class="badge bg-secondary">no longer exists</span>
+                {% elif links_known %}
+                {% for alias in links.get(identity.provider_subject, []) %}
+                <span class="badge bg-azure me-1">{{ broker_labels.get(alias, alias) }}</span>
+                {% else %}
+                <span class="badge bg-secondary">Password only</span>
+                {% endfor %}
+                {% else %}
                 {{ broker_labels.get(identity.broker_alias, identity.broker_alias)
                    if identity.broker_alias else "Direct" }}
+                {% endif %}
                 {% if identity.provider_subject == subject %}
                 <span class="badge bg-blue ms-1">this session</span>
                 {% endif %}
+              </td>
+              <td>
+                {{ broker_labels.get(identity.broker_alias, identity.broker_alias)
+                   if identity.broker_alias else "Direct" }}
               </td>
               <td>{{ identity.email or "—" }}</td>
               <td>
@@ -103,11 +119,26 @@
       <p class="text-muted">No sign-in methods recorded yet.</p>
       {% endif %}
 
+      {% if stale %}
+      <p class="text-muted">
+        An account marked <em>no longer exists</em> was removed at your identity
+        provider &mdash; usually because it was merged into another one. Nothing
+        can sign in as it again. It is listed only so the feeds and history that
+        came from it are not a mystery.
+      </p>
+      {% endif %}
+
       <p class="text-muted mb-0">
-        This is what this site has actually seen you sign in with, not a live
-        view of your identity provider. A provider you link elsewhere appears
-        here the first time you use it to sign in. &ldquo;Subject&rdquo; is the
-        id your provider gave the credential, and is what identifies you here.
+        {% if links_known %}
+        &ldquo;Sign in with&rdquo; is a live view of what is linked at your
+        identity provider; &ldquo;last used with&rdquo; is the one this site saw
+        most recently.
+        {% else %}
+        Your identity provider could not be reached, so this shows what this
+        site has seen you sign in with rather than everything you have linked.
+        {% endif %}
+        &ldquo;Subject&rdquo; is the id your provider gave the account, and is
+        what identifies you here.
       </p>
     </div>
   </div>

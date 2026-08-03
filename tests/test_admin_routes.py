@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlmodel.ext.asyncio.session import AsyncSession as SqlModelAsyncSession
 from starlette.requests import Request
 
+from cafe_car.admin import account_view
 from tests.factories import PROVIDER, add_member, make_feed, make_user
 
 if TYPE_CHECKING:
@@ -443,6 +444,111 @@ async def test_the_account_page_names_the_broker_and_the_live_credential(
     assert response.status_code == 200
     assert "GitHub" in response.text
     assert "this session" in response.text
+
+
+class _FakeKeycloak:
+    """Stands in for the admin API. `missing` subjects are ones the realm has
+    forgotten, which is how a merged-away account looks from here."""
+
+    def __init__(
+        self, links: dict[str, list[str]], missing: set[str] | None = None
+    ) -> None:
+        self._links = links
+        self._missing = missing or set()
+
+    async def user_exists(self, subject: str) -> bool:
+        return subject not in self._missing
+
+    async def federated_identities(self, subject: str) -> list[dict]:
+        return [{"identityProvider": a} for a in self._links.get(subject, [])]
+
+
+async def test_the_account_page_lists_every_linked_provider(
+    client: AsyncClient, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One realm account can be reached through several providers, and only
+    Keycloak knows the whole set — a login reports just the one it came by."""
+    user = await make_user(session, email="multi@example.com", subject="kc-multi")
+    identity = await session.scalar(
+        select(Identity).where(Identity.provider_subject == "kc-multi")
+    )
+    identity.broker_alias = "github"
+    await session.commit()
+
+    monkeypatch.setattr(
+        account_view,
+        "get_keycloak_client",
+        lambda: _FakeKeycloak({"kc-multi": ["github", "google"]}),
+    )
+
+    response = await client.get(
+        "/account", headers=_headers("kc-multi", user.primary_email)
+    )
+
+    assert response.status_code == 200
+    assert "GitHub" in response.text
+    assert "Google" in response.text
+
+
+async def test_the_account_page_marks_a_credential_the_realm_forgot(
+    client: AsyncClient, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A merged-away account leaves its row behind. Nothing can sign in as it
+    again, so it must not read as a way in."""
+    user = await make_user(session, email="gone@example.com", subject="kc-live")
+    stale = Identity(
+        user_id=user.id,
+        provider="keycloak",
+        provider_subject="kc-gone",
+        email="gone@example.com",
+        email_verified=True,
+    )
+    session.add(stale)
+    await session.commit()
+
+    monkeypatch.setattr(
+        account_view,
+        "get_keycloak_client",
+        lambda: _FakeKeycloak({"kc-live": ["github"]}, missing={"kc-gone"}),
+    )
+
+    response = await client.get(
+        "/account", headers=_headers("kc-live", user.primary_email)
+    )
+
+    assert response.status_code == 200
+    assert "no longer exists" in response.text
+
+
+async def test_the_account_page_survives_an_unreachable_keycloak(
+    client: AsyncClient, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Losing the provider must not cost you the page — it still knows what it
+    has seen you sign in with."""
+    user = await make_user(session, email="down@example.com", subject="kc-down")
+    identity = await session.scalar(
+        select(Identity).where(Identity.provider_subject == "kc-down")
+    )
+    identity.broker_alias = "github"
+    await session.commit()
+
+    class _Broken:
+        async def user_exists(self, subject: str) -> bool:
+            raise RuntimeError("keycloak is down")
+
+        async def federated_identities(self, subject: str) -> list[dict]:
+            raise RuntimeError("keycloak is down")
+
+    monkeypatch.setattr(account_view, "get_keycloak_client", lambda: _Broken())
+
+    response = await client.get(
+        "/account", headers=_headers("kc-down", user.primary_email)
+    )
+
+    assert response.status_code == 200
+    assert "could not be reached" in response.text
+    # Falls back to the broker it saw rather than claiming nothing is linked.
+    assert "GitHub" in response.text
 
 
 async def test_the_account_page_explains_an_unverified_address(

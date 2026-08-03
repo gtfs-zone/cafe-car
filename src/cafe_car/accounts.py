@@ -298,10 +298,13 @@ def _refresh_profile(
     display_name: str | None,
     broker_alias: str | None = None,
 ) -> None:
-    # Only ever fills a blank. The claim is absent whenever the issuer did not
-    # bother to send it, and "we were not told this time" is not evidence that
-    # what we were told before was wrong.
-    if broker_alias and not identity.broker_alias:
+    # The claim is absent whenever the issuer did not bother to send it, and
+    # "we were not told this time" is not evidence that what we were told
+    # before was wrong — so an absent claim never clobbers a known value. But
+    # a *present* claim is current, positive information (this login really
+    # did come through this broker) and must overwrite whatever broker was
+    # recorded on a previous login of the same account.
+    if broker_alias:
         identity.broker_alias = broker_alias
     now = datetime.now(UTC)
     seen = identity.last_seen_at
