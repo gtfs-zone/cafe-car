@@ -19,6 +19,32 @@ router = APIRouter()
 PROTOBUF_CONTENT_TYPE = "application/x-protobuf"
 
 
+def _public_vehicle_id(
+    tracker_nickname: str,
+    public_id: str | None,
+    trip_id: str | None,
+    start_date: str | None,
+) -> str:
+    """The GTFS-RT `VehicleDescriptor.id` for one vehicle record.
+
+    A producer's own `vehicle_id` is trusted when given, but a producer with no
+    concept of a public per-vehicle id (or one that forgets to set it — this bit
+    a buswhere feed that ran several devices under one tracker credential) must
+    not collapse every such vehicle onto the bare tracker nickname: GTFS-RT
+    requires this id "unique per vehicle", and two concurrent vehicles sharing a
+    tracker would otherwise share this id too. Folding in the trip instance
+    (trip_id + start_date, the same disambiguator used for `entity.id`) restores
+    uniqueness for any concurrently-running vehicles, without requiring every
+    producer to invent its own scheme.
+    """
+    if public_id:
+        return public_id
+    if trip_id:
+        instance = f"{trip_id}:{start_date}" if start_date else trip_id
+        return f"{tracker_nickname}:{instance}"
+    return tracker_nickname
+
+
 async def get_feed(
     feed_name: str,
     session: AsyncSession = Depends(get_session),  # noqa: B008
@@ -84,10 +110,9 @@ async def trip_updates(
             )
             if start_date:
                 entity.trip_update.trip.start_date = start_date
-            # Public per-vehicle id from the producer, else the tracker nickname.
-            # Never the secret tracker id.
-            entity.trip_update.vehicle.id = (
-                trip_data.get("vehicle_id") or tracker.nickname
+            # Public per-vehicle id — never the secret tracker id.
+            entity.trip_update.vehicle.id = _public_vehicle_id(
+                tracker.nickname, trip_data.get("vehicle_id"), trip_id, start_date
             )
             entity.trip_update.timestamp = trip_data["timestamp"]
             for update in _stop_time_updates(trip_data):
@@ -164,22 +189,19 @@ async def vehicle_positions(
             trip_id = data.get("trip_id")
             start_date = data.get("start_date")
             entity = msg.entity.add()
-            # Public per-vehicle identity from the producer. One tracker credential
-            # can carry many concurrent vehicles (Amtrak's fleet under one id), so
-            # the tracker nickname is only a fallback for single-device producers.
-            public_id = data.get("vehicle_id")
             # entity.id must be unique within the message, stable across polls, and
-            # free of the secret tracker id. A running scan-order counter satisfied
-            # none of those; derive it from the record's own identity instead.
-            if public_id:
-                entity.id = public_id
-            elif trip_id:
-                instance = f"{trip_id}:{start_date}" if start_date else trip_id
-                entity.id = f"{tracker.nickname}:{instance}"
-            else:
-                entity.id = tracker.nickname
+            # free of the secret tracker id — and per GTFS-RT, so must the actual
+            # VehicleDescriptor.id below, so both share this derivation. One tracker
+            # credential can carry many concurrent vehicles (Amtrak's fleet under
+            # one id), so the tracker nickname is only a fallback for single-device
+            # producers, folded with the trip instance when there are several.
+            public_id = data.get("vehicle_id")
+            vehicle_id = _public_vehicle_id(
+                tracker.nickname, public_id, trip_id, start_date
+            )
+            entity.id = vehicle_id
             # Public label only (the tracker id is the secret credential).
-            entity.vehicle.vehicle.id = public_id or tracker.nickname
+            entity.vehicle.vehicle.id = vehicle_id
             entity.vehicle.vehicle.label = (
                 data.get("vehicle_label") or public_id or tracker.nickname
             )
