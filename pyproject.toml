@@ -28,6 +28,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "httpx",
+    "aiosqlite>=0.22.1",
 ]
 
 [build-system]
@@ -56,3 +57,11 @@ major_version_zero = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+filterwarnings = [
+    # SQLModel nags on every `session.execute()`, suggesting `session.exec()`.
+    # The application uses `execute()` throughout deliberately (it returns Row
+    # objects the scoped queries want), so the nag is pure noise that would
+    # bury a warning worth reading.
+    # (?s) so `.` spans the message's newlines — it is a multi-line banner.
+    "ignore:(?s).*You probably want to use `session.exec\\(\\)`.*:DeprecationWarning",
+]
