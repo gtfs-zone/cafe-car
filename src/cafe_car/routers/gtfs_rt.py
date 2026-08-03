@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from cafe_car.alerts import active_alerts, to_utc
 from cafe_car.database import get_session
 
 router = APIRouter()
@@ -241,27 +242,16 @@ async def service_alerts(
         .where(ServiceAlert.feed_id == feed.id)
         .options(selectinload(ServiceAlert.entities))
     )
-    all_alerts = result.all()
-
-    def _utc(dt: datetime) -> datetime:
-        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
-
-    active_alerts = [
-        a
-        for a in all_alerts
-        if (a.active_period_start is None or _utc(a.active_period_start) <= now)
-        and (a.active_period_end is None or _utc(a.active_period_end) > now)
-    ]
+    # Shared with the feed catalog, which reports `has_alerts` — the two must
+    # never disagree about what this feed is publishing.
+    published = active_alerts(result.all(), now)
 
     msg = gtfs_realtime_pb2.FeedMessage()
     msg.header.gtfs_realtime_version = "2.0"
     msg.header.incrementality = gtfs_realtime_pb2.FeedHeader.FULL_DATASET
     msg.header.timestamp = int(now.timestamp())
 
-    # skip alerts with no informed entities
-    active_alerts = [a for a in active_alerts if a.entities]
-
-    for i, alert in enumerate(active_alerts, start=1):
+    for i, alert in enumerate(published, start=1):
         entity = msg.entity.add()
         entity.id = str(i)
         pb_alert = entity.alert
@@ -269,9 +259,9 @@ async def service_alerts(
         if alert.active_period_start is not None or alert.active_period_end is not None:
             period = pb_alert.active_period.add()
             if alert.active_period_start is not None:
-                period.start = int(_utc(alert.active_period_start).timestamp())
+                period.start = int(to_utc(alert.active_period_start).timestamp())
             if alert.active_period_end is not None:
-                period.end = int(_utc(alert.active_period_end).timestamp())
+                period.end = int(to_utc(alert.active_period_end).timestamp())
 
         for ie in alert.entities:
             selector = pb_alert.informed_entity.add()

@@ -17,23 +17,24 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from urllib.parse import quote, urlencode
 
+from cafe_car.feed_urls import feed_rt_urls
+
 if TYPE_CHECKING:
     from railroad_club.models.feed import Feed
 
 VIZ_BASE = "https://viz.rt.gtfs.zone"
 EDITOR_BASE = "https://edit.gtfs.zone"
-PUBLIC_RT_BASE = "https://rt.gtfs.zone"
 
 
 def viz_url(feed: Feed) -> str:
     """Build a viz.rt.gtfs.zone deep link that loads this feed's static +
     realtime sources. Routes both through the CORS proxy (``cors=s,r``)."""
-    rt_base = f"{PUBLIC_RT_BASE}/{feed.feed_name}"
+    rt = feed_rt_urls(feed)
     params = {
         "static": feed.static_feed_url or "",
-        "rt_vp": f"{rt_base}/vehicle_positions.pb",
-        "rt_tu": f"{rt_base}/trip_updates.pb",
-        "rt_al": f"{rt_base}/service_alerts.pb",
+        "rt_vp": rt.vehicle_positions,
+        "rt_tu": rt.trip_updates,
+        "rt_al": rt.service_alerts,
         "cors": "s,r",
     }
     return f"{VIZ_BASE}/#{urlencode(params)}"
