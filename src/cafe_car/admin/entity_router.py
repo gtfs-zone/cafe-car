@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from railroad_club.models.feed import Feed
@@ -12,7 +12,9 @@ from railroad_club.models.user import User
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cafe_car.accounts import choose_absorber, link_candidates, merge_users
 from cafe_car.admin.access import accessible_feed_ids
+from cafe_car.admin.context import current_user_id_var
 from cafe_car.settings import get_settings
 from cafe_car.sharing import (
     list_members,
@@ -370,6 +372,53 @@ async def delete_invite(request: Request, feed_id: int, invite_id: int) -> HTMLR
     return await _render_members(
         request, session, feed, user_id, message="Invitation withdrawn."
     )
+
+
+# ── Account linking ──────────────────────────────────────────────────────────
+#
+# The page itself is a SQLAdmin BaseView (admin/account_view.py); the two
+# mutating actions live here with the rest of the permission-checked routes.
+
+
+@router.post("/account/link-confirm")
+async def link_confirm(request: Request, candidate_user_id: int = Form()) -> Response:
+    user_id = await _current_user_id(request)
+    if not user_id:
+        return HTMLResponse("Not signed in", status_code=403)
+    session: AsyncSession = request.state.session
+
+    # Re-derive the offer rather than trusting the posted id. The form is only
+    # ever rendered for a real match, but a merge is irreversible and deletes a
+    # user, so the check has to happen where the decision is made.
+    candidates = await link_candidates(session, user_id)
+    if not any(c.id == candidate_user_id for c in candidates):
+        return HTMLResponse(
+            "That account does not share a verified email with yours.", status_code=403
+        )
+
+    me = await session.get(User, user_id)
+    them = await session.get(User, candidate_user_id)
+    absorbing, absorbed = choose_absorber(me, them)
+    await merge_users(session, absorbing_id=absorbing.id, absorbed_id=absorbed.id)
+
+    # If the caller's own principal was the one absorbed, the session is now
+    # holding a deleted id. Their identity row points at the survivor, so the
+    # next authenticate would fix it — but not before this response's redirect
+    # is served against the stale id.
+    request.session["user_id"] = absorbing.id
+    current_user_id_var.set(absorbing.id)
+    request.session.pop("link_dismissed", None)
+    return RedirectResponse(url="/account", status_code=303)
+
+
+@router.post("/account/link-dismiss")
+async def link_dismiss(
+    request: Request, candidate_user_id: int = Form()
+) -> RedirectResponse:
+    dismissed = set(request.session.get("link_dismissed") or [])
+    dismissed.add(candidate_user_id)
+    request.session["link_dismissed"] = sorted(dismissed)
+    return RedirectResponse(url="/account", status_code=303)
 
 
 @router.post("/feeds/{feed_id}/transfer", response_class=HTMLResponse)

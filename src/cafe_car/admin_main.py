@@ -11,6 +11,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from cafe_car.admin.account_view import AccountAdmin
 from cafe_car.admin.auth import OIDCAuthBackend
 from cafe_car.admin.context import current_user_id_var
 from cafe_car.admin.entity_router import router as entity_router
@@ -120,6 +121,7 @@ def create_admin_app() -> FastAPI:
     admin.add_view(TrackerRuleAdmin)
     admin.add_view(ServiceAlertAdmin)
     admin.add_view(InformedEntityAdmin)
+    admin.add_view(AccountAdmin)
 
     # The scoped views raise PermissionError when a row is not the caller's.
     # Without this it escapes as a 500; once feeds are shared, non-owners hit
