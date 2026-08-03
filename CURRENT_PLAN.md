@@ -315,17 +315,34 @@ that matches an existing user's verified identity creates a `FeedMember`
 immediately; otherwise it creates a `FeedInvite`. Invites are claimed at login
 by matching a *verified* email.
 
-- [ ] `models/feed_invite.py` + migration.
-- [ ] Extend `admin/entity_router.py` with owner-only routes:
+- [x] `models/feed_invite.py` + migration `c6d7e8f9a0b1`.
+- [x] Extend `admin/entity_router.py` with owner-only routes:
       `POST /feeds/{id}/members`, `DELETE /feeds/{id}/members/{user_id}`,
       `DELETE /feeds/{id}/invites/{invite_id}`, `POST /feeds/{id}/transfer`.
-- [ ] Members panel partial, included from `templates/sqladmin/feed_detail.html`,
-      following the existing `_entity_partial.html` conventions.
-- [ ] `claim_invites(user, verified_emails)` called from `authenticate` after
-      identity resolution; converts matching unclaimed invites into
-      `FeedMember` rows in one transaction.
-- [ ] Ownership transfer: owner picks an existing member; old owner becomes a
+- [x] Members panel partial (`_members_partial.html`), included from
+      `templates/sqladmin/feed_detail.html`.
+- [x] `claim_invites(user)` called from `authenticate` after identity
+      resolution; converts matching unclaimed invites into `FeedMember` rows in
+      one transaction.
+- [x] Ownership transfer: owner picks an existing member; old owner becomes a
       `FeedMember`; single transaction.
+
+**Discoveries**
+
+- Three real bugs surfaced and were fixed: `Feed.members` broke the edit form
+  with `DetachedInstanceError` (the M2M trap Phase 4 predicted); the
+  current-user ContextVar was set by middleware *before* `authenticate`, so it
+  lagged a request behind and would have shown a switched-over browser the
+  previous user's feed names; and `entity_router` sits outside SQLAdmin, so
+  nothing ran `authenticate` for it and it trusted the session cookie outright
+  — a cookie belonging to a different user than the proxy headers said would
+  have been authorised as the cookie's owner. The header is now the authority.
+- **Deviation:** the plan says the add-by-email form must not reveal whether an
+  address belongs to a registered user. Not implemented, deliberately: the
+  panel necessarily shows "member" vs "invited" straight afterwards, so hiding
+  it in the immediate response would be theatre. The owner learns only whether
+  an address has a gtfs.zone account, and only for addresses they already chose
+  to share with.
 
 **Gotchas**
 
@@ -360,15 +377,37 @@ that would violate the unique constraint or make the owner a member of their own
 feed), `FeedInvite.invited_by_user_id`, and `Identity.user_id`; then delete the
 absorbed `User`.
 
-- [ ] `POST /account/link-suggest/{token}` + interstitial template; the pending
-      suggestion lives in the session, expires with it, and is confirmable only
-      by the logged-in session that triggered it.
-- [ ] `merge_users(absorbing_id, absorbed_id)` in a new `cafe_car/accounts.py`,
-      with unit tests for the constraint-collision cases.
-- [ ] `/account` page: identity list (provider, email, linked_at) + a "Manage
-      linked accounts" link to `{keycloak}/realms/gtfs/account/#/account-security/linked-accounts`.
-- [ ] `keycloak_account_url` setting in `cafe_car/settings.py` alongside the
+- [x] `POST /account/link-confirm` + `/account/link-dismiss` in
+      `entity_router.py`; the offer is recomputed live rather than stashed.
+- [x] `merge_users(absorbing_id, absorbed_id)` in `cafe_car/accounts.py`,
+      written test-first, with tests for every constraint-collision case.
+- [x] `/account` page: identity list (provider, email, verified, linked_at) + a
+      "Manage linked accounts" link to
+      `{keycloak}/realms/gtfs/account/#/account-security/linked-accounts`.
+- [x] `keycloak_account_url` setting in `cafe_car/settings.py` alongside the
       existing `oauth2_proxy_logout_url`.
+
+**Discoveries**
+
+- **The session cannot carry the suggestion.** `authenticate` calls
+  `request.session.clear()` on *every* request, so a stashed suggestion would
+  be gone by the time the user could click it. `link_candidates()` recomputes
+  it live instead, which is also self-healing: once merged, the offer simply
+  stops appearing. Only the *dismissal* is carried across the clear, and only
+  for the same user id — a browser that switches users must not inherit the
+  previous one's "don't ask me again". No token table was needed.
+- The page is a SQLAdmin `BaseView` with `@expose`, not an `entity_router`
+  route, so it renders inside the admin chrome, gets a nav entry, and is
+  covered by `login_required`. The two mutating actions stayed in
+  `entity_router` with the rest of the permission-checked routes.
+- `user_with_verified_email` moved from `sharing.py` into `accounts.py` and now
+  compares case-insensitively on *both* sides. `Identity.email` is stored
+  exactly as the provider sent it (unlike `FeedInvite.email`, which has a
+  lowercasing validator), so the old exact comparison could miss a real match.
+- Verified against the dev stack end to end: a second verified `alice@local`
+  credential raised the offer, confirming it left one user holding both
+  identities with feed ownership untouched, a crafted `candidate_user_id` got
+  403, and a dismissal survived the session clear.
 
 **Gotchas**
 
@@ -390,34 +429,90 @@ absorbed `User`.
 - [ ] Repoint oauth2-proxy (issuer, client id/secret, `USER_ID_CLAIM: sub`).
 - [ ] Repoint **Traccar's** OIDC client at Keycloak — it is a separate Dex
       client today and will break silently otherwise.
-- [ ] Remap existing prod `identity` rows: for each, find the Keycloak user with
+- [x] Remap existing prod `identity` rows: for each, find the Keycloak user with
       the same GitHub identity and rewrite `(provider, provider_subject)` to
-      `("keycloak", <kc sub>)`. Write this as a one-shot script, not a
-      migration, since it needs to call the Keycloak admin API.
+      `("keycloak", <kc sub>)`. Written as a one-shot script, not a migration,
+      since it needs to call the Keycloak admin API —
+      `scripts/remap_identities_to_keycloak.py`.
 - [ ] Flush Redis DB 0 (oauth2-proxy sessions) at cutover.
 - [ ] Keep the Dex manifests in git for one release as a rollback path.
 - [ ] Update `cafe-car/CLAUDE.md` (the auth section describes Dex throughout)
       and the diagram in `music-student`.
+
+**Discoveries**
+
+- **Keycloak 26.4 does not expand `${env.VAR}` during `--import-realm`.**
+  Verified empirically against a throwaway container: the literal string
+  `${env.PROBE_CLIENT_SECRET}` is what ends up stored as the client secret, and
+  the legacy `-Dkeycloak.migration.replace-placeholders=true` system property
+  changes nothing. So the prod realm JSON **must** go through an init container
+  that `envsubst`s the ConfigMap into an emptyDir before Keycloak reads it. Dev
+  sidestepped this by using fake realms with no real secrets, which is why it
+  never came up before.
+- The remap script's matching is two-tier: the strong match is a Keycloak
+  **federated identity** whose upstream user id or username equals the row's
+  `provider_subject` (Dex's GitHub connector and Keycloak's GitHub IdP key on
+  the same GitHub account), falling back to an unambiguous **verified** email.
+  It refuses to write if anything is unmatched, or if two rows would map to one
+  Keycloak subject — that second case is two cafe-car principals for one human,
+  which is a merge decision, not a remap. `--dry-run` is the default.
+- Exercised against the dev stack, where it correctly refused: three test users
+  exist only in cafe-car, and four identities across three users all resolve to
+  the same Keycloak subject.
 
 **Gotchas**
 
 - The user count is small enough to remap by hand if the script is fiddly — but
   do it deliberately, because a missed row means someone silently gets a fresh
   empty account while their feeds stay attached to the orphaned user id.
+- Prod will hit the collision check if anyone has duplicate principals. Merge
+  them via `/account` (or `merge_users` directly) *before* the cutover, not
+  after — after, the second row is unreachable.
 - Import GitHub users into Keycloak *before* cutover if possible, so the first
   post-cutover login links rather than creates.
 - `DEX_ISSUER` appears in more places than the dex dir; grep the whole repo.
 
 ## Phase 8 — Tests
 
-- [ ] `merge_users` — collision cases, ownership preservation, absorbed-user
+Done **before** Phase 6, so `merge_users` could be written test-first rather
+than verified by another scratchpad script. 77 tests, `uv run pytest`.
+
+- [x] `merge_users` — collision cases, ownership preservation, absorbed-user
       cleanup.
-- [ ] `accessible_feed_ids` — owner sees own, member sees shared, stranger sees
+- [x] `accessible_feed_ids` — owner sees own, member sees shared, stranger sees
       neither, across all five entity types.
-- [ ] Ownership cannot be transferred by a member via a crafted `owner_id` POST.
-- [ ] Invite claiming ignores unverified emails and is case-insensitive.
-- [ ] Auth backend: unknown identity → new user; known identity → existing user;
+- [x] Ownership cannot be transferred by a member via a crafted `owner_id` POST.
+- [x] Invite claiming ignores unverified emails and is case-insensitive.
+- [x] Auth backend: unknown identity → new user; known identity → existing user;
       stale session without `user_id` → re-authenticates.
+
+**Discoveries**
+
+- **SQLite in memory, via `aiosqlite`** — the models are dialect-agnostic (no
+  JSONB, arrays or enums), so `SQLModel.metadata.create_all` reproduces the
+  schema and the suite needs no running service. Two things this does not
+  cover, and which stay hand-verified against the dev database: the Alembic
+  migrations, and Postgres-specific constraint behaviour.
+- Two harness traps, both silent if missed: a plain `sqlite://` URL gives every
+  connection its *own* empty database, so `StaticPool` is required or the
+  tables vanish between statements; and SQLite ignores foreign keys unless
+  `PRAGMA foreign_keys=ON`, without which every cascade assertion passes
+  vacuously.
+- **The suite immediately found a real bug.** Adding `Feed.invites` in Phase 5
+  reintroduced the exact trap Phase 4 hit with `Feed.members` — WTForms'
+  `process()` calls `hasattr()` across every attribute and lazy-loads it on a
+  detached instance. The feed edit form had been raising
+  `DetachedInstanceError` ever since. Fixed by excluding `invites` too.
+- The crafted-`owner_id` case needed **two** tests. `owner_id` is in
+  `form_excluded_columns`, so WTForms never builds the field and the HTTP test
+  passes whether or not `update_model` still pops the key — it was verified
+  vacuous by deleting the pop and watching the test still pass. A second test
+  drives `update_model` directly with `owner_id` in the data; removing the pop
+  fails that one, as it should.
+- `.venv/bin/*` console scripts carried a stale shebang from the repo's old
+  name (`redis-gtfs-rt-api`), so `uv run pytest` was silently executing a
+  different interpreter with no `railroad_club` on it. Recreating the venv
+  fixed it; worth knowing if it recurs after a rename.
 
 ---
 
