@@ -1,7 +1,7 @@
 """Service-to-service ingest API.
 
 Direct HTTP seam for producers that already know their own `trip_id` (Amtrak via
-hell-gate-bridge, and simulate_trip.py) — as opposed to the Traccar shim, which
+hell-gate-bridge, and simulate_trip.py), as opposed to the Traccar shim, which
 resolves the trip server-side. Writes the *exact* `vehicle:*` record shape that
 `gtfs_rt.py` and the vehicle-poser shim use, with the same 60s TTL, so the serving
 code needs zero changes.
@@ -58,14 +58,14 @@ AlertEffect = Literal[
 ]
 AlertSeverity = Literal["UNKNOWN_SEVERITY", "INFO", "WARNING", "SEVERE"]
 
-# GTFS-RT VehicleStopStatus, by name. Every one of them names a stop — the
-# vehicle is approaching, sitting at, or heading to *that* stop — so a status is
+# GTFS-RT VehicleStopStatus, by name. Every one of them names a stop: the
+# vehicle is approaching, sitting at, or heading to *that* stop, so a status is
 # only meaningful alongside a stop reference (see PositionIngest below).
 VehicleStopStatus = Literal["INCOMING_AT", "STOPPED_AT", "IN_TRANSIT_TO"]
 
-# Must match the vehicle-poser shim's TTL — cafe-car serves whatever is live.
+# Must match the vehicle-poser shim's TTL; cafe-car serves whatever is live.
 POSITION_TTL = 60
-# Trip-update predictions live longer than a single fix — a prediction is valid
+# Trip-update predictions live longer than a single fix; a prediction is valid
 # even if the next position hasn't landed yet. Still bounded so stale trips age
 # out once a producer stops publishing.
 TRIP_UPDATE_TTL = 300
@@ -77,7 +77,7 @@ class PositionIngest(BaseModel):
     tracker_id: str
     # Public per-vehicle identity. One tracker credential can fan out to many
     # concurrent vehicles (e.g. Amtrak's ~53 trains under one credential), so the
-    # producer — which knows the real vehicle — supplies its GTFS
+    # producer, which knows the real vehicle, supplies its GTFS
     # VehicleDescriptor.id/label here. Absent for single-device producers, which
     # fall back to the tracker nickname at serialisation.
     vehicle_id: str | None = None
@@ -91,7 +91,7 @@ class PositionIngest(BaseModel):
     route_id: str | None = None
     # GTFS-RT service date (YYYYMMDD). A >24h daily trip (Amtrak long-distance)
     # has several instances of the same trip_id en route at once; start_date is
-    # what tells them apart — without it they collide on one Redis key.
+    # what tells them apart; without it they collide on one Redis key.
     start_date: str | None = None
     # Where the vehicle is *now*, along its trip. Without this a consumer can
     # draw the vehicle on a map but cannot place it against the schedule, so a
@@ -99,7 +99,7 @@ class PositionIngest(BaseModel):
     #
     # `current_status` describes the vehicle's relationship to the stop named by
     # `current_stop_sequence`/`stop_id`, so it is only accepted together with
-    # one of them — a bare status names nothing. All three absent is fine: it
+    # one of them; a bare status names nothing. All three absent is fine: it
     # means "not reported", which is what the feed will then say.
     current_stop_sequence: int | None = None
     stop_id: str | None = None
@@ -111,7 +111,7 @@ class PositionIngest(BaseModel):
             self.current_stop_sequence is None and self.stop_id is None
         ):
             raise ValueError(
-                "current_status requires current_stop_sequence or stop_id — "
+                "current_status requires current_stop_sequence or stop_id, "
                 "the status describes the vehicle's relationship to that stop"
             )
         return self
@@ -160,7 +160,7 @@ class AlertIngest(BaseModel):
     header_text: str
     description_text: str
     url: str | None = None
-    # Restricted to the exact GTFS-RT enum names — gtfs_rt.py's
+    # Restricted to the exact GTFS-RT enum names; gtfs_rt.py's
     # service_alerts serialiser calls Alert.Cause/Effect/SeverityLevel.Value()
     # on these at feed-build time, so an invalid string would 500 the feed
     # instead of failing fast here at ingest.
@@ -221,7 +221,7 @@ async def ingest_position(
     # gtfs_rt.py::vehicle_positions (tracker_id, trip_id, lat, lon, bearing,
     # speed, timestamp, optional route_id, optional public vehicle_id/label,
     # optional current_stop_sequence/stop_id/current_status). Producers that
-    # predate a key simply omit it — the serialiser reads with .get().
+    # predate a key simply omit it; the serialiser reads with .get().
     record: dict[str, object] = {
         "tracker_id": body.tracker_id,
         "trip_id": body.trip_id,
@@ -261,7 +261,7 @@ async def ingest_trip_update(
     _check_auth(authorization)
 
     # Rich, multi-stop record read by gtfs_rt.py::trip_updates. Supersedes the
-    # old single-`delay` shape trip-updogger wrote — producers (Amtrak via
+    # old single-`delay` shape trip-updogger wrote; producers (Amtrak via
     # hell-gate, simulate_trip.py) now supply per-stop predictions directly.
     record = {
         "trip_id": body.trip_id,

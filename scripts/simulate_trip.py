@@ -43,7 +43,7 @@ Usage:
     # Custom delay range (seconds):
     uv run scripts/simulate_trip.py --min-delay 30 --max-delay 300 --delay-drift 10
 
-    # Device mode — emulate the Traccar Client app (posts fixes to :5055). The
+    # Device mode: emulate the Traccar Client app (posts fixes to :5055). The
     # trip is resolved server-side from the tracker's rules, so no trip_id is
     # sent; --trip only selects which shape to drive along. Requires a provisioned
     # Traccar device whose uniqueId == <tracker-id>.
@@ -259,7 +259,7 @@ def main() -> int:
     parser.add_argument(
         "--tracker",
         default="bob",
-        help="Tracker id — must equal a provisioned Tracker.id (default: bob, which "
+        help="Tracker id, must equal a provisioned Tracker.id (default: bob, which "
         "won't surface in any feed). In device mode it is also the Traccar device "
         "uniqueId, so the device must exist (see scripts/provision_source.py).",
     )
@@ -290,7 +290,7 @@ def main() -> int:
         "--speed",
         type=float,
         default=10.0,
-        help="Simulation speed multiplier — how many scheduled seconds pass per real second (default: 10)",
+        help="Simulation speed multiplier: how many scheduled seconds pass per real second (default: 10)",
     )
     parser.add_argument(
         "--interval",
@@ -352,7 +352,7 @@ def main() -> int:
             n_trips = len(trips_by_route.get(route_id, []))
             short = route.get("route_short_name", "")
             long = route.get("route_long_name", "")
-            name = f"{short} — {long}" if short and long else short or long
+            name = f"{short} - {long}" if short and long else short or long
             print(f"  {route_id:<20} {name:<40} trips={n_trips}")
         return 0
 
@@ -419,7 +419,7 @@ def main() -> int:
         for t in threads:
             t.join()
     except KeyboardInterrupt:
-        print("\nInterrupted — waiting for threads to finish.")
+        print("\nInterrupted, waiting for threads to finish.")
 
     return 0
 
@@ -525,7 +525,7 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
             # The sim already knows the current stop and its delay, so in ingest
             # mode it emits the trip-update directly rather than leaving
             # trip-updogger to recompute it. (Device mode sends no trip-update at
-            # all — the fix goes to Traccar and trip-updogger derives the
+            # all: the fix goes to Traccar and trip-updogger derives the
             # prediction from it, which is the path a real driver exercises.)
             current_stop = stop_times[stop_idx]
             trip_update_body = {
@@ -545,7 +545,7 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
             try:
                 if args.mode == "device":
                     # Emulate the Traccar Client app: one location fix to :5055.
-                    # No trip_id — vehicle-poser resolves it from the tracker's
+                    # No trip_id, vehicle-poser resolves it from the tracker's
                     # rules. Speed is carried in knots (the app's wire unit).
                     client.post(
                         args.traccar_url,

@@ -3,7 +3,7 @@
 An OIDC login arrives as ``(provider, subject)``. That pair identifies an
 :class:`Identity`, and the identity points at the :class:`User` who actually
 owns things. A person with GitHub and Google linked has two identities and one
-user — which is the entire point of the split.
+user, which is the entire point of the split.
 """
 
 from __future__ import annotations
@@ -106,9 +106,9 @@ async def resolve_login(
     # An unseen credential. Keycloak's first-broker-login flow normally catches
     # the "this email already has an account" case upstream and links there, so
     # reaching here with a known address means the same person exists in
-    # Keycloak twice. Create the new principal regardless — a silent merge on
-    # an email match is exactly the takeover primitive this whole design avoids
-    # — and hand the caller a candidate to offer them.
+    # Keycloak twice. Create the new principal regardless, since a silent merge
+    # on an email match is exactly the takeover primitive this whole design
+    # avoids, and hand the caller a candidate to offer them.
     candidate = None
     if email and email_verified:
         existing = await user_with_verified_email(session, email)
@@ -124,11 +124,11 @@ async def resolve_login(
     if email and not email_verified:
         # Worth a warning, not an info: this credential cannot claim a feed
         # invite, cannot be shared with by address, and cannot be offered as a
-        # link candidate — all of which look like the feature is broken rather
+        # link candidate, all of which look like the feature is broken rather
         # than like the issuer never vouched for the address. A broker with
         # `trustEmail` off is the usual cause.
         logger.warning(
-            "resolve_login: new identity subject=%s has unverified email %s — "
+            "resolve_login: new identity subject=%s has unverified email %s, "
             "invites and account linking will not match it",
             subject,
             email,
@@ -156,7 +156,7 @@ async def link_candidates(session: AsyncSession, user_id: int) -> list[User]:
 
     Recomputed on every view rather than remembered. ``authenticate`` clears
     the session on each request, so a stashed suggestion would not survive to
-    be acted on; and a live query is self-healing — once the accounts are
+    be acted on; and a live query is self-healing: once the accounts are
     merged, or the address stops being verified, the offer simply stops
     appearing.
     """
@@ -186,8 +186,8 @@ def choose_absorber(a: User, b: User) -> tuple[User, User]:
     """Order two users as ``(absorbing, absorbed)``.
 
     The older account absorbs. Feeds, memberships and invites all reference a
-    ``user.id``, and the older id has had longer to be referenced — from
-    outside the database too, in bookmarks and logs — so it is the one worth
+    ``user.id``, and the older id has had longer to be referenced, from
+    outside the database too, in bookmarks and logs, so it is the one worth
     keeping.
     """
     if a.created_at != b.created_at:
@@ -200,7 +200,7 @@ async def merge_users(
 ) -> None:
     """Fold ``absorbed_id`` into ``absorbing_id`` and delete the absorbed user.
 
-    One transaction. A half-merged pair — feeds moved but identities not, say —
+    One transaction. A half-merged pair (feeds moved but identities not, say)
     would leave someone locked out of their own data with no way to tell from
     the outside, so there is no partial success here.
 
@@ -224,7 +224,7 @@ async def merge_users(
 
     # 2. Memberships. Two ways a row cannot simply be reassigned: the absorbing
     #    user is already a member of that feed (UNIQUE(feed_id, user_id)), or
-    #    they now own it — and an owner is never also a member of their own
+    #    they now own it, and an owner is never also a member of their own
     #    feed. Both resolve by dropping the redundant row, not by moving it.
     owned_now = set(
         (await session.execute(select(Feed.id).where(Feed.owner_id == absorbing_id)))
@@ -270,7 +270,7 @@ async def merge_users(
         .values(claimed_user_id=absorbing_id)
     )
 
-    # 4. The credentials themselves — the point of the exercise.
+    # 4. The credentials themselves, the point of the exercise.
     await session.execute(
         update(Identity)
         .where(Identity.user_id == absorbed_id)
@@ -300,7 +300,7 @@ def _refresh_profile(
 ) -> None:
     # The claim is absent whenever the issuer did not bother to send it, and
     # "we were not told this time" is not evidence that what we were told
-    # before was wrong — so an absent claim never clobbers a known value. But
+    # before was wrong, so an absent claim never clobbers a known value. But
     # a *present* claim is current, positive information (this login really
     # did come through this broker) and must overwrite whatever broker was
     # recorded on a previous login of the same account.

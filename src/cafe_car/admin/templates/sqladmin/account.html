@@ -74,7 +74,7 @@
                 {{ broker_labels.get(identity.broker_alias, identity.broker_alias)
                    if identity.broker_alias else "Direct" }}
               </td>
-              <td>{{ identity.email or "—" }}</td>
+              <td>{{ identity.email or "-" }}</td>
               <td>
                 {% if identity.email_verified %}
                 <span class="badge bg-green">verified</span>
@@ -87,14 +87,14 @@
                 <time data-utc="{{ identity.linked_at.isoformat() }}">
                   {{ identity.linked_at.isoformat() }}
                 </time>
-                {% else %}—{% endif %}
+                {% else %}-{% endif %}
               </td>
               <td>
                 {% if identity.last_seen_at %}
                 <time data-utc="{{ identity.last_seen_at.isoformat() }}">
                   {{ identity.last_seen_at.isoformat() }}
                 </time>
-                {% else %}—{% endif %}
+                {% else %}-{% endif %}
               </td>
               <td>
                 <code title="{{ identity.provider_subject }}">

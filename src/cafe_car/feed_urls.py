@@ -1,8 +1,8 @@
 """Where a feed's public GTFS-RT endpoints live.
 
 The path shapes are declared by ``routers/gtfs_rt.py``; this is the one place
-that spells them out as URLs. Both consumers — the admin UI's viz deep link
-(``admin/links.py``) and the public feed catalog (``routers/catalog.py``) —
+that spells them out as URLs. Both consumers (the admin UI's viz deep link
+in ``admin/links.py`` and the public feed catalog in ``routers/catalog.py``)
 come through here, so a renamed route breaks in one place rather than three.
 
 ``PUBLIC_RT_BASE`` is hardcoded to prod for the same reason the frontend bases

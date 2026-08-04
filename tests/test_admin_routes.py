@@ -104,7 +104,7 @@ async def test_update_model_drops_owner_id_even_when_it_reaches_the_data(
     """The route above is guarded twice over: `owner_id` is in
     `form_excluded_columns`, so WTForms never builds the field, *and*
     `update_model` pops the key. The first guard alone makes the HTTP test pass,
-    which would leave the pop untested — so drive it directly.
+    which would leave the pop untested, so drive it directly.
 
     Takes the `client` fixture only for its side effect: `create_admin_app()`
     is what binds the engine and the async session maker onto the view class.
@@ -188,7 +188,7 @@ async def test_a_stale_session_without_a_user_id_re_authenticates(
     client: AsyncClient, session: AsyncSession, engine: AsyncEngine
 ) -> None:
     """A session cookie minted before the identity split carries only
-    `subject`. It must not be trusted, and must not lock the user out — the
+    `subject`. It must not be trusted, and must not lock the user out; the
     proxy header is re-resolved on every request."""
     user = await make_user(session, email="stale@example.com", subject="kc-stale")
     feed = await make_feed(session, user, "stale-feed")
@@ -199,7 +199,7 @@ async def test_a_stale_session_without_a_user_id_re_authenticates(
     assert first.status_code == 200
     assert "stale-feed" in first.text
 
-    # Drop the cookie entirely — the harshest version of a session that no
+    # Drop the cookie entirely: the harshest version of a session that no
     # longer carries what the app needs.
     client.cookies.clear()
     second = await client.get(
@@ -238,7 +238,7 @@ async def test_the_feed_hub_renders_everything_beneath_the_feed(
     SQLAdmin closes the query's session before rendering, so every relationship
     the hub template touches has to be eager loaded in `form_edit_query`. Drop
     one of those `selectinload`s and this is a DetachedInstanceError, not a
-    subtly wrong page — which is exactly why it is asserted here.
+    subtly wrong page, which is exactly why it is asserted here.
     """
     owner = await make_user(session, email="hub@example.com", subject="kc-hub")
     feed = await make_feed(session, owner, "hub-feed")
@@ -429,7 +429,7 @@ async def test_the_account_page_names_the_broker_and_the_live_credential(
     client: AsyncClient, session: AsyncSession
 ) -> None:
     """`provider` is `keycloak` for every row, so it never told anyone how they
-    actually signed in — nor which of two principals they are using now."""
+    actually signed in, nor which of two principals they are using now."""
     user = await make_user(session, email="acct@example.com", subject="kc-acct")
     identity = await session.scalar(
         select(Identity).where(Identity.provider_subject == "kc-acct")
@@ -467,7 +467,7 @@ async def test_the_account_page_lists_every_linked_provider(
     client: AsyncClient, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """One realm account can be reached through several providers, and only
-    Keycloak knows the whole set — a login reports just the one it came by."""
+    Keycloak knows the whole set; a login reports just the one it came by."""
     user = await make_user(session, email="multi@example.com", subject="kc-multi")
     identity = await session.scalar(
         select(Identity).where(Identity.provider_subject == "kc-multi")
@@ -523,7 +523,7 @@ async def test_the_account_page_marks_a_credential_the_realm_forgot(
 async def test_the_account_page_survives_an_unreachable_keycloak(
     client: AsyncClient, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Losing the provider must not cost you the page — it still knows what it
+    """Losing the provider must not cost you the page; it still knows what it
     has seen you sign in with."""
     user = await make_user(session, email="down@example.com", subject="kc-down")
     identity = await session.scalar(

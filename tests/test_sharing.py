@@ -259,7 +259,7 @@ class TestClaimInvites:
         """The whole shape of the carol@local bug.
 
         A broker configured without ``trustEmail`` hands over an address it
-        never vouched for. The invite is not lost — it simply waits, and lands
+        never vouched for. The invite is not lost; it simply waits, and lands
         the first time the provider does vouch.
         """
         owner = await make_user(session, email="owner@example.com")

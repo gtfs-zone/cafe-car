@@ -67,7 +67,7 @@ class OIDCAuthBackend(AuthenticationBackend):
                 or request.headers.get("X-Auth-Request-Email")
                 or None
             )
-            # Only the token can vouch for an address being verified — the
+            # Only the token can vouch for an address being verified; the
             # proxy header carries the address with no such claim attached.
             # Account linking keys off this, so it must not be generous.
             email_verified = bool(claims.get("email_verified") and claims.get("email"))
@@ -75,7 +75,7 @@ class OIDCAuthBackend(AuthenticationBackend):
             # Which upstream provider Keycloak brokered this session through,
             # from a user-session-note mapper on the client. A direct realm
             # login has no such note, so the claim is simply absent. Display
-            # only — `provider_subject` is still what identifies the caller.
+            # only; `provider_subject` is still what identifies the caller.
             broker_alias = (claims.get("identity_provider") or "")[:64].strip() or None
 
             factory = get_session_factory()
@@ -112,12 +112,12 @@ class OIDCAuthBackend(AuthenticationBackend):
         # Authoritative for this request. SubjectMiddleware primes the var from
         # the session before we get here, which is a request behind: on the
         # first request of a session it is still 0, and on a browser that
-        # switches users it still holds the *previous* user — which would feed
+        # switches users it still holds the *previous* user, which would feed
         # their feed list into scaffold_form's dropdown. Overwrite it now that
         # the identity is actually known.
         current_user_id_var.set(user.id)
         # user_id is what every scoped query filters on. `subject` is kept for
-        # display and debugging only — nothing authorises against it any more.
+        # display and debugging only; nothing authorises against it any more.
         request.session["user_id"] = user.id
         request.session["subject"] = subject
         if user.display_name:
@@ -125,7 +125,7 @@ class OIDCAuthBackend(AuthenticationBackend):
         if user.primary_email:
             request.session["email"] = user.primary_email
         # Carry dismissals across the clear above, but only for the same
-        # person — a browser that switched users must not inherit the previous
+        # person; a browser that switched users must not inherit the previous
         # one's "don't ask me again".
         if prior.get("user_id") == user.id and prior.get("link_dismissed"):
             request.session["link_dismissed"] = prior["link_dismissed"]

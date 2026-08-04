@@ -103,7 +103,7 @@ async def share_feed(
     # address, so someone whose provider never vouched for theirs can sign in
     # repeatedly and never receive this. Say what actually has to happen. The
     # wording deliberately does not distinguish "no such account" from "account
-    # exists but is unverified" — that would tell any feed owner whether an
+    # exists but is unverified", since that would tell any feed owner whether an
     # address is registered here.
     return ShareResult(
         "invited", f"{email} will get access once they sign in with a verified {email}."
@@ -139,8 +139,8 @@ async def transfer_ownership(
 ) -> None:
     """Hand a feed to one of its members; the old owner stays on as a member.
 
-    One transaction, because a feed with no owner — or with an owner who is
-    also a member — is a state nothing else in the app expects.
+    One transaction, because a feed with no owner (or with an owner who is
+    also a member) is a state nothing else in the app expects.
     """
     old_owner_id = feed.owner_id
     if new_owner_id == old_owner_id:

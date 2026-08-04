@@ -23,7 +23,7 @@
         <label class="form-label">Tracker ID</label>
         <input type="text" class="form-control font-monospace" value="{{ obj.id }}" readonly>
         <small class="form-hint text-danger">
-          This is the device's only credential — there is no password. Treat it
+          This is the device's only credential; there is no password. Treat it
           like one: anyone holding it can post positions as this vehicle. It is
           never shown in the public feed, which uses the nickname instead.
         </small>
@@ -59,7 +59,7 @@
                                     ("Sun", rule.sunday)] -%}
                 {%- if on %}{{ days.append(label) or "" }}{% endif -%}
               {%- endfor -%}
-              {{ days | join(", ") or "—" }}
+              {{ days | join(", ") or "-" }}
             </td>
             <td class="text-muted">{{ rule.start_time }}&ndash;{{ rule.end_time }}</td>
           </tr>

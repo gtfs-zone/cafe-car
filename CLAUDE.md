@@ -1,4 +1,4 @@
-# cafe-car — Claude Guide
+# cafe-car - Claude Guide
 
 ## Project Overview
 
@@ -31,8 +31,8 @@ GitHub / Google / GitLab OAuth
     └─> Keycloak (OIDC provider, brokers the above; links them to one account)
             └─> oauth2-proxy (ForwardAuth middleware, auth.gtfs.zone)
                     └─> Traefik
-                            ├─> FastAPI admin app (manage.rt.gtfs.zone) — protected by oauth2-proxy
-                            └─> FastAPI public API (rt.gtfs.zone)    — no auth required
+                            ├─> FastAPI admin app (manage.rt.gtfs.zone), protected by oauth2-proxy
+                            └─> FastAPI public API (rt.gtfs.zone), no auth required
                                     ├─> PostgreSQL (SQLModel models, Alembic migrations)
                                     └─> Redis DB 1  (cache / RT data)
 ```
@@ -40,21 +40,21 @@ GitHub / Google / GitLab OAuth
 ## Authentication
 
 oauth2-proxy injects headers on every authenticated request to the admin interface:
-- `X-Auth-Request-User` — OIDC `sub` claim (a Keycloak UUID); identifies the credential
-- `X-Auth-Request-Email` — email address
-- `X-Auth-Request-Access-Token` — OIDC access token
+- `X-Auth-Request-User`: OIDC `sub` claim (a Keycloak UUID); identifies the credential
+- `X-Auth-Request-Email`: email address
+- `X-Auth-Request-Access-Token`: OIDC access token
 
-No passwords are stored for web users — Keycloak owns credentials, and brokers GitHub/Google/GitLab behind them.
+No passwords are stored for web users; Keycloak owns credentials, and brokers GitHub/Google/GitLab behind them.
 
 **A person is not a credential.** `User` is the principal that everything else (feeds, memberships) points at; `Identity` is one row per `(provider, provider_subject)` pair, many-to-one back to `User`. Signing in with GitHub and with Google gives one user and two identities. `cafe_car/accounts.py::resolve_login` resolves a login to a `User`, creating both rows the first time a credential is seen.
 
-Every scoped query filters on `user_id`, never on the raw header. `request.session["user_id"]` and `current_user_id_var` carry it; `subject` is kept for display only. `cafe_car/admin/access.py::accessible_feed_ids` is the single definition of "may touch this feed" (owner **or** member) — trackers, tracker rules, alerts and informed entities all scope through it.
+Every scoped query filters on `user_id`, never on the raw header. `request.session["user_id"]` and `current_user_id_var` carry it; `subject` is kept for display only. `cafe_car/admin/access.py::accessible_feed_ids` is the single definition of "may touch this feed" (owner **or** member); trackers, tracker rules, alerts and informed entities all scope through it.
 
 A new credential whose *verified* email already belongs to another user never merges silently. It gets its own principal, and `/account` offers the merge, which the user confirms. `merge_users` is in `accounts.py`.
 
-The public GTFS-RT endpoints (`rt.gtfs.zone`) have **no authentication middleware** — they are publicly accessible.
+The public GTFS-RT endpoints (`rt.gtfs.zone`) have **no authentication middleware**; they are publicly accessible.
 
-`Tracker` records have a secret pet-name `id` (e.g. `gently-tender-oyster`) that serves as the Traccar `uniqueId` / QR provisioning credential. There is **no password**. The `id` is a secret and is never exposed in a public GTFS-RT feed — feeds show the tracker's public `nickname` instead.
+`Tracker` records have a secret pet-name `id` (e.g. `gently-tender-oyster`) that serves as the Traccar `uniqueId` / QR provisioning credential. There is **no password**. The `id` is a secret and is never exposed in a public GTFS-RT feed; feeds show the tracker's public `nickname` instead.
 
 ## Redis DB Allocation
 
@@ -70,7 +70,7 @@ There are two separate FastAPI apps sharing the same DB/Redis:
 - `src/app/main.py` → **public API** (`app = create_public_app()`): GTFS-RT protobuf endpoints (`/{feed_name}/trip_updates.pb`, `vehicle_positions.pb`, `service_alerts.pb`) + the HTTP ingest seam (`POST /ingest/position`, `POST /ingest/trip-update`). Run with `uv run fastapi dev src/app/main.py`.
 - `src/app/admin_main.py` → **admin app** (`app = create_admin_app()`): SQLAdmin interface mounted at `/`. Uses `OIDCAuthBackend`, `SessionMiddleware`, `DBSessionMiddleware`, and `SubjectMiddleware`. Run with `uv run fastapi dev src/app/admin_main.py`.
 
-The current user id flows via `request.session["user_id"]` and via `current_user_id_var` (`ContextVar`) for use in `scaffold_form`, where `request` is unavailable. The ContextVar is set inside `authenticate`, not in the middleware — middleware runs *before* authentication, so it would otherwise lag a request behind and hand a switched-over browser the previous user's data.
+The current user id flows via `request.session["user_id"]` and via `current_user_id_var` (`ContextVar`) for use in `scaffold_form`, where `request` is unavailable. The ContextVar is set inside `authenticate`, not in the middleware, because middleware runs *before* authentication, so it would otherwise lag a request behind and hand a switched-over browser the previous user's data.
 
 **There are no details pages.** Every view subclasses `ScopedModelView`, which
 sets `can_view_details = False`, so `/{identity}/details/{pk}` returns 403. The
@@ -78,18 +78,18 @@ edit page is the only page for an object and shows non-editable fields read-only
 `/feed/edit/{id}` is the hub, linking to the feed's trackers, alerts and people.
 `templates/sqladmin/list.html` is a **fork** of the pinned sqladmin's copy (row
 actions moved right and reduced to delete; relation cells link to `admin:edit`,
-since `admin:details` now 403s) — re-check it whenever the `sqladmin` pin moves.
+since `admin:details` now 403s); re-check it whenever the `sqladmin` pin moves.
 
 htmx is vendored at `admin/static/htmx.min.js`, served from `/vendor/htmx.min.js`
 and loaded once in `base.html`. Do not add per-template CDN `<script>` tags: a
 page that forgets one leaves its panels reading "Loading…" forever, which is
 exactly how the sharing UI shipped broken.
 
-`admin/entity_router.py` holds the routes that sit **outside** SQLAdmin (sharing, account linking, htmx partials). Nothing runs `authenticate` for them, so they take the proxy header as authoritative and fall back to user id `0` — never to the session cookie, which may belong to whoever used the browser last. They are registered *before* `Admin` mounts at `/`, or the mount swallows them.
+`admin/entity_router.py` holds the routes that sit **outside** SQLAdmin (sharing, account linking, htmx partials). Nothing runs `authenticate` for them, so they take the proxy header as authoritative and fall back to user id `0`, never to the session cookie, which may belong to whoever used the browser last. They are registered *before* `Admin` mounts at `/`, or the mount swallows them.
 
 ## Redis Data Format
 
-Vehicle positions are stored at key `vehicle:{tracker.id}` as JSON with fields: `tracker_id`, `lat`, `lon`, `bearing`, `speed`, `trip_id`, `route_id` (optional), `timestamp`. The `tracker_id` is the secret credential and is only a Redis-internal identifier — feeds label vehicles by the tracker's public `nickname`, resolved from the DB.
+Vehicle positions are stored at key `vehicle:{tracker.id}` as JSON with fields: `tracker_id`, `lat`, `lon`, `bearing`, `speed`, `trip_id`, `route_id` (optional), `timestamp`. The `tracker_id` is the secret credential and is only a Redis-internal identifier; feeds label vehicles by the tracker's public `nickname`, resolved from the DB.
 
 ## Alembic Workflow
 
@@ -127,7 +127,7 @@ curl -H "X-Auth-Request-User: alice" -H "X-Auth-Request-Email: alice@example.com
      http://localhost:8000/admin
 ```
 
-`X-Auth-Request-User` is the OIDC subject and is the only thing that identifies the caller — the header alone creates the `User` and `Identity` on first use. To simulate a *verified* email (needed for invite claiming and account linking, both of which refuse unverified addresses), set `DEBUG=true` and pass an unsigned JWT whose `sub` matches the header:
+`X-Auth-Request-User` is the OIDC subject and is the only thing that identifies the caller; the header alone creates the `User` and `Identity` on first use. To simulate a *verified* email (needed for invite claiming and account linking, both of which refuse unverified addresses), set `DEBUG=true` and pass an unsigned JWT whose `sub` matches the header:
 
 ```bash
 TOKEN=$(python3 -c "
@@ -152,11 +152,11 @@ curl -H "X-Auth-Request-User: alice" -H "Authorization: Bearer $TOKEN" http://lo
 - Never include `Co-Authored-By: Claude ...` trailers in commit messages.
 - Do not use Playwright / the browser automation tools. The user tests UI changes manually.
 - Never create a stop_time with null departure and arrival
-- Admin views must always scope queries through `accessible_feed_ids` — never expose a Feed or Tracker the caller neither owns nor is a member of
+- Admin views must always scope queries through `accessible_feed_ids`; never expose a Feed or Tracker the caller neither owns nor is a member of
 - Never add a relationship to `Feed` without also excluding it from `FeedAdmin.form_excluded_columns`. WTForms walks every attribute and lazy-loads it on a detached instance, which raises `DetachedInstanceError` and breaks the edit form. This has now happened twice (`members`, `invites`)
 - Anything a `*_edit.html` template touches must be eager-loaded in that view's `form_edit_query`. SQLAdmin's `_run_query` closes its session before rendering, so a bare relationship access is a `DetachedInstanceError`, not a slow query
-- Never interpolate model text into `Markup(...)` in a `column_formatters` lambda — use `_link()` or `escape()`. `nickname`, `header_text` and `trip_id` are free text and `Tracker.id` is caller-supplied, so unescaped interpolation is stored XSS against everyone a feed is shared with
-- Never match an invite or link two accounts on an **unverified** email — that is an account-takeover primitive
+- Never interpolate model text into `Markup(...)` in a `column_formatters` lambda; use `_link()` or `escape()`. `nickname`, `header_text` and `trip_id` are free text and `Tracker.id` is caller-supplied, so unescaped interpolation is stored XSS against everyone a feed is shared with
+- Never match an invite or link two accounts on an **unverified** email; that is an account-takeover primitive
 - Use `uv` for all package management (never `pip install` directly)
 - Run `uv run ruff check src/` before committing
 
@@ -186,7 +186,7 @@ This project uses an offline-first workflow. Claude reads/writes `CURRENT_PLAN.m
 
 ### Completing a phase (triggered by "complete phase N" or "do phase N")
 
-1. Read `CURRENT_PLAN.md` directly — do not fetch from Forgejo
+1. Read `CURRENT_PLAN.md` directly (do not fetch from Forgejo)
 2. Implement everything in the phase; commit as you go with conventional commits
 3. After completing, update `CURRENT_PLAN.md`: check off completed items, append discoveries to that phase's prose
 4. Do not update the Forgejo issue; do not start the next phase; stop for user review

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 
 def owned_feed_ids(user_id: int) -> Select[tuple[int]]:
-    """Feeds this user owns — the only ones they may delete or hand over."""
+    """Feeds this user owns: the only ones they may delete or hand over."""
     return select(Feed.id).where(Feed.owner_id == user_id)
 
 

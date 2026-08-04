@@ -23,7 +23,7 @@ class TraccarClient:
     """Minimal async client for the Traccar REST API.
 
     Authenticates with a bearer API token when configured, otherwise falls back
-    to Basic auth (email/password) — the dev default.
+    to Basic auth (email/password), the dev default.
     """
 
     def __init__(

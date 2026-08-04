@@ -78,7 +78,7 @@ async def _current_user_id(request: Request) -> int:
     them and the session cookie may be stale or belong to whoever used this
     browser last. The proxy header is the authority: the cached session id is
     used only when it agrees with the header, and otherwise the identity is
-    looked up afresh. Returns 0 — which matches no rows anywhere — rather than
+    looked up afresh. Returns 0 (which matches no rows anywhere) rather than
     falling back to the cookie.
     """
     subject = request.headers.get("X-Auth-Request-User") or request.headers.get(
@@ -416,7 +416,7 @@ async def link_confirm(request: Request, candidate_user_id: int = Form()) -> Res
 
     # If the caller's own principal was the one absorbed, the session is now
     # holding a deleted id. Their identity row points at the survivor, so the
-    # next authenticate would fix it — but not before this response's redirect
+    # next authenticate would fix it, but not before this response's redirect
     # is served against the stale id.
     request.session["user_id"] = absorbing.id
     current_user_id_var.set(absorbing.id)

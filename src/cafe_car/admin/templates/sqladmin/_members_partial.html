@@ -18,15 +18,15 @@
       </thead>
       <tbody>
         <tr>
-          <td>{{ owner.display_name or "—" }}</td>
-          <td>{{ owner.primary_email or "—" }}</td>
+          <td>{{ owner.display_name or "-" }}</td>
+          <td>{{ owner.primary_email or "-" }}</td>
           <td><span class="badge bg-green">owner</span></td>
           <td></td>
         </tr>
         {% for member in members %}
         <tr>
-          <td>{{ member.user.display_name or "—" }}</td>
-          <td>{{ member.user.primary_email or "—" }}</td>
+          <td>{{ member.user.display_name or "-" }}</td>
+          <td>{{ member.user.primary_email or "-" }}</td>
           <td>
             <span class="badge bg-blue">member</span>
             {% if member.user_id == current_user_id %}<em>(you)</em>{% endif %}
@@ -83,7 +83,7 @@
       <small class="text-muted">
         Members can do everything you can with this feed except change who owns
         it, delete it, or manage this list. That includes seeing its tracker
-        IDs, which are the secret credentials a driver's phone signs in with —
+        IDs, which are the secret credentials a driver's phone signs in with,
         so only add people you would hand those to.
       </small>
     </div>

@@ -34,8 +34,8 @@ def active_alerts(
     An alert with no informed entities selects nothing, so it is dropped rather
     than published as an entity no consumer can match.
 
-    ``.entities`` is touched here, so callers must have eager-loaded it —
-    ``selectinload(ServiceAlert.entities)`` — or the session must still be open.
+    ``.entities`` is touched here, so callers must have eager-loaded it
+    (``selectinload(ServiceAlert.entities)``), or the session must still be open.
     """
     return [
         a

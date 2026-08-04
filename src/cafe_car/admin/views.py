@@ -33,7 +33,7 @@ _STATUS_BADGE = {
 }
 
 _CAUSE_CHOICES = [
-    ("", "—"),
+    ("", "-"),
     ("UNKNOWN_CAUSE", "Unknown Cause"),
     ("OTHER_CAUSE", "Other Cause"),
     ("TECHNICAL_PROBLEM", "Technical Problem"),
@@ -49,7 +49,7 @@ _CAUSE_CHOICES = [
 ]
 
 _EFFECT_CHOICES = [
-    ("", "—"),
+    ("", "-"),
     ("NO_SERVICE", "No Service"),
     ("REDUCED_SERVICE", "Reduced Service"),
     ("SIGNIFICANT_DELAYS", "Significant Delays"),
@@ -64,7 +64,7 @@ _EFFECT_CHOICES = [
 ]
 
 _SEVERITY_CHOICES = [
-    ("", "—"),
+    ("", "-"),
     ("UNKNOWN_SEVERITY", "Unknown"),
     ("INFO", "Info"),
     ("WARNING", "Warning"),
@@ -85,7 +85,7 @@ def _current_user_id(request: Request) -> int:
 
 
 def _link(href: str, label: object) -> Markup:
-    """An escaped anchor. Never interpolate model text into Markup directly —
+    """An escaped anchor. Never interpolate model text into Markup directly:
     nickname, header_text and trip_id are all free text, and Tracker.id is
     caller-supplied at creation, so unescaped interpolation is stored XSS."""
     return Markup(f'<a href="{escape(href)}">{escape(label)}</a>')
@@ -95,7 +95,7 @@ class ScopedModelView(ModelView):
     """Every view in this admin is per-user scoped and has no details page:
     the edit page is the only page for an object, showing anything
     non-editable read-only. The metaclass short-circuits without a `model=`
-    kwarg, so this stays an ordinary base class — but note it only reads
+    kwarg, so this stays an ordinary base class, but note it only reads
     `name`, `column_list` and friends off the *concrete* subclass, so those
     must never move up here."""
 
@@ -146,13 +146,13 @@ class FeedAdmin(ScopedModelView, model=Feed):
         "load_status_badge": lambda m, a: Markup(
             _STATUS_BADGE.get(
                 m.gtfs_static_feed.status if m.gtfs_static_feed else "",
-                '<span class="text-muted">—</span>',
+                '<span class="text-muted">-</span>',
             )
         ),
         "last_loaded_at": lambda m, a: (
             _fmt_utc_dt(m.gtfs_static_feed.last_loaded_at)
             if m.gtfs_static_feed and m.gtfs_static_feed.last_loaded_at
-            else Markup("—")
+            else Markup("-")
         ),
         "viz_link": lambda m, a: Markup(
             f'<a href="{viz_url(m)}" target="_blank" rel="noopener noreferrer">'
@@ -199,7 +199,7 @@ class FeedAdmin(ScopedModelView, model=Feed):
 
     def form_edit_query(self, request: Request) -> Select[tuple[Feed]]:
         # The edit page is the feed hub, and SQLAdmin closes the query's session
-        # before rendering — so everything the template touches must be eager
+        # before rendering, so everything the template touches must be eager
         # loaded or it raises DetachedInstanceError. Safe alongside
         # form_excluded_columns: exclusion is what keeps WTForms off these, and a
         # selectinload'ed collection is already populated either way.
@@ -253,7 +253,7 @@ class FeedAdmin(ScopedModelView, model=Feed):
         # Members may edit a feed's contents...
         await self._get_accessible_feed(request, pk)
         # ...but ownership is never settable from a form. Dropping the key
-        # here — not merely hiding the field — is what stops a crafted POST.
+        # here, not merely hiding the field, is what stops a crafted POST.
         data.pop("owner_id", None)
         return await super().update_model(request, pk, data)
 
@@ -273,7 +273,7 @@ class FeedAdmin(ScopedModelView, model=Feed):
 class TrackerAdmin(ScopedModelView, model=Tracker):
     edit_template = "sqladmin/tracker_edit.html"
     # The secret id and the QR both live on the tracker's own page, which the
-    # nickname links to — a "provisioning" column here would just duplicate it.
+    # nickname links to; a "provisioning" column here would just duplicate it.
     column_list: ClassVar[list] = [Tracker.nickname, "feed"]
     column_formatters: ClassVar[dict] = {
         Tracker.nickname: lambda m, a: _link(f"/tracker/edit/{m.id}", m.nickname),
@@ -534,16 +534,16 @@ class ServiceAlertAdmin(ScopedModelView, model=ServiceAlert):
 
 
 _ROUTE_TYPE_CHOICES = [
-    (0, "0 — Tram / Light Rail"),
-    (1, "1 — Subway / Metro"),
-    (2, "2 — Rail"),
-    (3, "3 — Bus"),
-    (4, "4 — Ferry"),
-    (5, "5 — Cable Tram"),
-    (6, "6 — Aerial Lift"),
-    (7, "7 — Funicular"),
-    (11, "11 — Trolleybus"),
-    (12, "12 — Monorail"),
+    (0, "0 - Tram / Light Rail"),
+    (1, "1 - Subway / Metro"),
+    (2, "2 - Rail"),
+    (3, "3 - Bus"),
+    (4, "4 - Ferry"),
+    (5, "5 - Cable Tram"),
+    (6, "6 - Aerial Lift"),
+    (7, "7 - Funicular"),
+    (11, "11 - Trolleybus"),
+    (12, "12 - Monorail"),
 ]
 
 
@@ -584,7 +584,7 @@ class InformedEntityAdmin(ScopedModelView, model=InformedEntity):
         )
         Form.route_type = SelectField(
             "Route Type",
-            choices=[("", "—"), *_ROUTE_TYPE_CHOICES],
+            choices=[("", "-"), *_ROUTE_TYPE_CHOICES],
             coerce=lambda x: None if x == "" else int(x),
             validators=[Optional()],
         )

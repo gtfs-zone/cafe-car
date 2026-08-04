@@ -408,7 +408,7 @@ def run_follow(args) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Map vis — SSE server + Leaflet HTML
+# Map vis: SSE server + Leaflet HTML
 # ---------------------------------------------------------------------------
 
 MAP_HTML = """\
@@ -444,7 +444,7 @@ MAP_HTML = """\
     font-size:11px; line-height:1.35; overflow-x:auto; white-space:pre;
     color:#c8c8c8;
   }
-  /* Whole trips can run to dozens of stops — scroll rather than grow a popup
+  /* Whole trips can run to dozens of stops, so scroll rather than grow a popup
      taller than the map. */
   .stopwrap { max-height:220px; overflow-y:auto; margin-top:4px; }
   table.stops { border-collapse:collapse; font-size:11px; }
@@ -502,7 +502,7 @@ const markers = {};
 let firstData = true;
 
 // MessageToDict omits scalars equal to their default, so `speed: 0` and
-// `delay: 0` arrive as undefined rather than 0 — always supply a fallback.
+// `delay: 0` arrive as undefined rather than 0, so always supply a fallback.
 function num(v, dflt) { return (v === undefined || v === null) ? dflt : Number(v); }
 function esc(s) {
   return String(s).replace(/[&<>"]/g, c =>
@@ -518,7 +518,7 @@ function fmtDelay(d) {
   if (n === 0) return {text: 'on time', cls: 'ontime'};
   return {text: (n > 0 ? '+' : '') + n + 's', cls: n > 0 ? 'late' : 'early'};
 }
-// Same as fmtDelay but spells out h/m/s — used in map popups only; the sidebar
+// Same as fmtDelay but spells out h/m/s, used in map popups only; the sidebar
 // stays raw seconds.
 function fmtDelayHuman(d) {
   if (d === undefined || d === null) return {text: '-', cls: 'dim'};
@@ -534,7 +534,7 @@ function fmtDelayHuman(d) {
   if (s || !parts.length) parts.push(s + 's');
   return {text: (n > 0 ? '+' : '-') + parts.join(''), cls};
 }
-// Prefer arrival, fall back to departure — matches how the feed fills these in.
+// Prefer arrival, fall back to departure; matches how the feed fills these in.
 function stuDelay(stu) {
   if (!stu) return undefined;
   if (stu.arrival && stu.arrival.delay !== undefined) return stu.arrival.delay;
@@ -611,7 +611,7 @@ evtSource.onmessage = function(e) {
   const aEnts = (d.service_alerts || {}).entity || [];
 
   // A >24h daily trip has several instances of one trip_id live at once, told
-  // apart by start_date — so join on (trip_id, start_date), not trip_id alone.
+  // apart by start_date, so join on (trip_id, start_date), not trip_id alone.
   function tripKey(trip) {
     const tid = trip && trip.trip_id;
     if (!tid) return null;
@@ -621,7 +621,7 @@ evtSource.onmessage = function(e) {
 
   // Join vehicles to trip updates. vehicle_positions rewrites trip_id through
   // the feed's alias map while trip_updates does not, so the vehicle id is the
-  // more dependable key — index both and try the trip instance first.
+  // more dependable key, so index both and try the trip instance first.
   const tuByTrip = {}, tuByVehicle = {};
   tEnts.forEach(e => {
     const tu = e.trip_update || {};
@@ -635,7 +635,7 @@ evtSource.onmessage = function(e) {
     return (k && tuByTrip[k]) || (vid && tuByVehicle[vid]) || null;
   }
 
-  // The whole trip, not just the next few — stops already passed are dimmed so
+  // The whole trip, not just the next few; stops already passed are dimmed so
   // the upcoming ones still read first.
   function stopsTable(tu) {
     if (!tu) return '<div class="dim">no trip update for this vehicle</div>';
@@ -737,7 +737,7 @@ evtSource.onmessage = function(e) {
       ${num(pos.speed, 0).toFixed(1)}m/s
       <span class="dim">${esc(v.current_status || '')}</span>`;
     // Entity ids are renumbered on every request, so key the open/closed state
-    // on something stable across polls — the trip instance (trip_id+start_date).
+    // on something stable across polls: the trip instance (trip_id+start_date).
     return entityBlock('v' + (tripKey(v.trip) || vid), summary, ent);
   }).join('') || '<div class="none">None</div>';
 
@@ -803,7 +803,7 @@ evtSource.onmessage = function(e) {
     + ` · ${aEnts.length} alert${aEnts.length!==1?'s':''}`;
 };
 evtSource.onerror = function() {
-  document.getElementById('statusbar').textContent = 'Connection lost — reconnecting…';
+  document.getElementById('statusbar').textContent = 'Connection lost, reconnecting…';
 };
 </script>
 </body>
@@ -838,7 +838,7 @@ def load_route_names(source: str) -> dict[str, str]:
 
 def push_to_map(data: dict) -> None:
     def _dump(msg):
-        """Whole FeedMessage as JSON — nothing hand-picked, nothing dropped."""
+        """Whole FeedMessage as JSON: nothing hand-picked, nothing dropped."""
         if msg is None:
             return {"header": None, "entity": []}
         return json_format.MessageToDict(msg, preserving_proto_field_name=True)

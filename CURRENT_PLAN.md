@@ -6,7 +6,7 @@ Two related pieces of work:
 
 1. **Identity.** Replace Dex with **Keycloak** so a person can sign in with GitHub
    *or* Google and land on the same account. Keycloak handles brokering, the
-   "an account with this email already exists — link it?" first-login prompt,
+   "an account with this email already exists, link it?" first-login prompt,
    and a self-serve Account Console where a logged-in user adds another
    provider. cafe-car additionally grows a canonical `user` + `identity` model
    so the app is not permanently married to one IdP's `sub` semantics.
@@ -14,12 +14,12 @@ Two related pieces of work:
    equivalent access, except that members may not transfer/delete ownership or
    manage the member list. Backed by an explicit `feed_member` association *row*
    (own PK, own timestamps) plus a `feed_invite` table for people who have never
-   logged in — deliberately not a SQLModel `link_model` M2M, for reasons in
+   logged in, deliberately not a SQLModel `link_model` M2M, for reasons in
    Phase 4.
 
 Decisions already made (do not relitigate):
 
-- Keycloak, replacing Dex — not "keep Dex + app-side linking".
+- Keycloak, replacing Dex, not "keep Dex + app-side linking".
 - App-side `identity` table anyway, even though Keycloak links upstream.
 - Email match → **suggest and require confirmation**, never silent auto-merge.
 - Flat owner + members. No viewer/editor tiers.
@@ -52,7 +52,7 @@ Decisions already made (do not relitigate):
 
 1. **Identity is keyed on whatever oauth2-proxy happens to pass.** Dev set
    `OAUTH2_PROXY_USER_ID_CLAIM: name`, so `provider_subject` was the *name*
-   claim — mutable, and not unique across connectors. (Older dev rows carry
+   claim, mutable, and not unique across connectors. (Older dev rows carry
    Dex's opaque per-connector `sub` instead, from before that setting; the dev
    DB has both, which is itself the duplicate-account problem in miniature.)
    Either way nothing survives the switch to Keycloak, so every existing `user`
@@ -73,7 +73,7 @@ Decisions already made (do not relitigate):
 
 ---
 
-## Phase 1 — Keycloak in the dev compose stack
+## Phase 1: Keycloak in the dev compose stack
 
 Stand Keycloak up next to Dex in `music-student` first, on a different port, so
 both can run while the app is ported. Configure it declaratively (realm JSON
@@ -92,7 +92,7 @@ link" behavior we want, and it does **not** auto-link on an unverified email.
       the existing `db` service with its own `keycloak` database.
 - [x] Write `music-student/dev/keycloak/gtfs-realm.json`: realm, clients, IdPs,
       and two dev users (alice/bob) at parity with the old static passwords.
-- [x] Wire the GitHub/Google IdPs — **as two fake Keycloak realms**, see below.
+- [x] Wire the GitHub/Google IdPs, **as two fake Keycloak realms**, see below.
 - [x] Repoint `oauth2-proxy` at Keycloak
       (`http://keycloak:8090/realms/gtfs`), and enable PKCE while there.
 - [x] **Set `OAUTH2_PROXY_USER_ID_CLAIM: sub`** (drop the `name` override).
@@ -102,7 +102,7 @@ link" behavior we want, and it does **not** auto-link on an unverified email.
 **Discoveries**
 
 - **No custom flow JSON was needed.** Keycloak's stock `first broker login`
-  flow already is exactly the chain the plan called for — verified against the
+  flow already is exactly the chain the plan called for, verified against the
   running server: Review Profile → *Create User If Unique* | *Handle Existing
   Account* → Confirm link existing account → (Verify by Email | Verify by
   Re-authentication). So the realm just points both IdPs at `first broker
@@ -122,7 +122,7 @@ link" behavior we want, and it does **not** auto-link on an unverified email.
   URL. Verified: discovery reports `issuer: http://keycloak:8090/realms/gtfs`.
 - **Verified end to end** by driving the login with curl: both IdP buttons
   render, and a full login through oauth2-proxy created
-  `user(provider=dex, provider_subject=d60d01c0-8846-…)` — a Keycloak UUID —
+  `user(provider=dex, provider_subject=d60d01c0-8846-…)` (a Keycloak UUID),
   alongside the pre-existing Dex row for the same person. Two rows, one human:
   precisely what Phases 2–3 and the Phase 7 remap exist to fix.
 
@@ -136,7 +136,7 @@ link" behavior we want, and it does **not** auto-link on an unverified email.
   cafe-car, hence the misleading `provider=dex` on the Keycloak row above.
   Phase 3 changes that string; Phase 7 rewrites the rows.
 
-## Phase 2 — Canonical `user` + `identity` schema in railroad-club
+## Phase 2: Canonical `user` + `identity` schema in railroad-club
 
 Split "the person" from "the credential". `User` becomes the identity-agnostic
 principal that everything else FKs to; `Identity` is one row per (provider,
@@ -161,7 +161,7 @@ pointing at `user.id`, so no FK churn elsewhere.
 **Discoveries**
 
 - The unique constraint is named `uq_user_provider_subject` (from migration
-  `a1b2c3d4e5f6`), not the Postgres default — dropping it by the default name
+  `a1b2c3d4e5f6`), not the Postgres default; dropping it by the default name
   would have failed on a real database.
 - Verified up → down → up against the dev database: `user.id` is preserved in
   both directions, so feed ownership survives.
@@ -175,15 +175,15 @@ pointing at `user.id`, so no FK churn elsewhere.
 
 - The backfilled `provider_subject` values are the *old Dex name-claim* strings,
   which will not match anything Keycloak sends. That is expected and is resolved
-  by the remap in Phase 7 — the backfill exists to preserve `user.id` (and
+  by the remap in Phase 7; the backfill exists to preserve `user.id` (and
   therefore feed ownership), not to keep anyone logged in.
 - Do **not** make `identity.email` unique. Two identities can legitimately carry
   the same email; that is the whole point.
 - `primary_email` is a denormalized convenience for display and invite matching.
-  Keep it a plain nullable column refreshed on login, not a computed property —
+  Keep it a plain nullable column refreshed on login, not a computed property;
   invite claiming (Phase 5) needs to query it.
 
-## Phase 3 — Rewrite the auth backend around user ids
+## Phase 3: Rewrite the auth backend around user ids
 
 `OIDCAuthBackend.authenticate` stops upserting a `User` keyed on the header and
 instead: look up `Identity` by `(provider, subject)` → if found, use its user;
@@ -193,7 +193,7 @@ every scoped query uses.
 
 The mechanical part is replacing the `.join(User, …).where(User.provider_subject == …)`
 pattern everywhere. Rather than search-and-replace 20 call sites into a new
-2-table join, introduce one helper and have every view call it — this also makes
+2-table join, introduce one helper and have every view call it; this also makes
 Phase 4's membership rules a single-place change.
 
 ```python
@@ -210,11 +210,11 @@ def owned_feed_ids(user_id: int) -> Select:           # owner only
 - [x] Add `cafe_car/admin/access.py`.
 - [x] Convert all five ModelViews (18 scoping queries) and the four
       `entity_router.py` helpers.
-- [x] Update `_macros.html` — the `subject` fallback is now a UUID, not a name,
+- [x] Update `_macros.html`: the `subject` fallback is now a UUID, not a name,
       so it was dropped rather than displayed.
 - [x] `oidc_provider` default `dex` → `keycloak`.
 - [x] PermissionError → 403 via a handler on SQLAdmin's sub-app (a handler on
-      the parent FastAPI app would not catch it — the mount has its own
+      the parent FastAPI app would not catch it, since the mount has its own
       exception middleware).
 
 **Discoveries**
@@ -228,7 +228,7 @@ def owned_feed_ids(user_id: int) -> Select:           # owner only
 **Gotchas**
 
 - `scaffold_form` in four views reads the ContextVar because `request` is not
-  available there (`views.py:246,418,545,667`). It must keep working — the
+  available there (`views.py:246,418,545,667`). It must keep working; the
   middleware sets the var per-request, so just change the type.
 - Session values survive a deploy. A stale session carrying only `subject` must
   fail closed: treat a missing `user_id` as unauthenticated and re-run
@@ -237,7 +237,7 @@ def owned_feed_ids(user_id: int) -> Select:           # owner only
   members will now hit these paths legitimately, convert to a 403/redirect with
   a flash message while touching this code.
 
-## Phase 4 — Feed membership (owner + members)
+## Phase 4: Feed membership (owner + members)
 
 ```
 FeedMember  id, feed_id FK, user_id FK, added_by_user_id FK, created_at
@@ -253,7 +253,7 @@ a first-class table with its own PK, never exposed as a SQLAdmin `ModelView`
 with a relationship widget, always mutated through explicit routes (Phase 5)
 that check permission server-side.
 
-Ownership stays as `Feed.owner_id`. Owner is *not* also a `FeedMember` row —
+Ownership stays as `Feed.owner_id`. Owner is *not* also a `FeedMember` row;
 one representation per fact, so "is owner" is never ambiguous.
 
 - [x] Add `models/feed_member.py` + `Feed.members` / `User.memberships`.
@@ -262,21 +262,21 @@ one representation per fact, so "is owner" is never ambiguous.
 - [x] Owner-only `delete_model`; `update_model` allows members but pops
       `owner_id` from the submitted data.
 - [x] `insert_model` sets `owner_id` to the creator (and no longer re-queries
-      the user — the session already carries the id).
+      the user, since the session already carries the id).
 - [x] "owner" / "shared with me" column on the feed list.
 - [ ] Member add/remove routes → owner only *(Phase 5, where they are written)*.
 
-**Discoveries — two bugs the new relationship exposed**
+**Discoveries: two bugs the new relationship exposed**
 
 - **`DetachedInstanceError` on the edit form.** WTForms' `process()` calls
   `hasattr(obj, name)` across every attribute, which lazy-loads `Feed.members`
-  on a detached instance. Fixed by excluding `members` from the form — the same
+  on a detached instance. Fixed by excluding `members` from the form, the same
   reason `trackers` and `alerts` were already excluded. This is the M2M-adjacent
   trap the plan predicted, and it fired immediately.
 - **The current-user ContextVar lagged one request behind.** `SubjectMiddleware`
   set it from the session, but middleware runs *before* `authenticate`. On the
   first request of a session it was 0; on a browser that switched users it still
-  held the previous user — and `scaffold_form` builds its feed dropdown from it,
+  held the previous user, and `scaffold_form` builds its feed dropdown from it,
   so user B's first request would have listed user A's feed names. Now set in
   `authenticate` once identity is known, with the middleware left as the
   fallback for the non-SQLAdmin `entity_router` routes. This predates the
@@ -290,7 +290,7 @@ one representation per fact, so "is owner" is never ambiguous.
 
 - Trackers, tracker rules, service alerts and informed entities all scope
   *through* the feed, so they inherit membership for free once
-  `accessible_feed_ids` is in place — verify each of the five views, including
+  `accessible_feed_ids` is in place; verify each of the five views, including
   `scaffold_form`'s feed dropdown, so a member can actually attach a tracker to
   a shared feed.
 - **Members can see tracker `id`s, which are the secret Traccar credentials.**
@@ -301,7 +301,7 @@ one representation per fact, so "is owner" is never ambiguous.
   appears.)
 - Never allow a `FeedMember` row where `user_id == feed.owner_id`.
 
-## Phase 5 — Sharing UI and invites
+## Phase 5: Sharing UI and invites
 
 ```
 FeedInvite  id, feed_id FK, email (stored lowercased), invited_by_user_id FK,
@@ -334,8 +334,8 @@ by matching a *verified* email.
   current-user ContextVar was set by middleware *before* `authenticate`, so it
   lagged a request behind and would have shown a switched-over browser the
   previous user's feed names; and `entity_router` sits outside SQLAdmin, so
-  nothing ran `authenticate` for it and it trusted the session cookie outright
-  — a cookie belonging to a different user than the proxy headers said would
+  nothing ran `authenticate` for it and it trusted the session cookie outright,
+  and a cookie belonging to a different user than the proxy headers said would
   have been authorised as the cookie's owner. The header is now the authority.
 - **Deviation:** the plan says the add-by-email form must not reveal whether an
   address belongs to a registered user. Not implemented, deliberately: the
@@ -350,25 +350,25 @@ by matching a *verified* email.
   on a stored-lowercase column. An unverified-email match is an account
   takeover primitive.
 - The add-by-email form must not leak whether an email belongs to a registered
-  user — return the same "invited" response either way.
+  user; return the same "invited" response either way.
 - Load members with `selectinload` in `details_query`; the async session will
   raise on lazy-load inside the template otherwise.
 - Route registration order matters: `entity_router` is included **before**
   `Admin` mounts at `/` (`admin_main.py`), or the mount swallows these paths.
 
-## Phase 6 — Linked accounts + the email-match prompt
+## Phase 6: Linked accounts + the email-match prompt
 
 Keycloak owns the actual linking, so cafe-car's job is (a) show the user what is
 linked, (b) send them to the Keycloak account console to link more, and (c)
 handle the case where a *new* identity arrives whose verified email matches an
 existing cafe-car user.
 
-Case (c) should be rare — Keycloak's first-broker-login flow normally catches it
+Case (c) should be rare: Keycloak's first-broker-login flow normally catches it
 upstream and links there. But it happens whenever the same person exists in
 Keycloak twice (two accounts, different emails at Keycloak but the same email
 later verified), so cafe-car must not silently create a duplicate principal.
 Behavior: create the new `Identity` attached to a **new** user, then show a
-one-time interstitial — "an existing account uses this email; link them?" —
+one-time interstitial ("an existing account uses this email; link them?"),
 which on confirm runs a merge.
 
 The merge is the sharp edge and must be one transaction:
@@ -394,7 +394,7 @@ absorbed `User`.
   be gone by the time the user could click it. `link_candidates()` recomputes
   it live instead, which is also self-healing: once merged, the offer simply
   stops appearing. Only the *dismissal* is carried across the clear, and only
-  for the same user id — a browser that switches users must not inherit the
+  for the same user id; a browser that switches users must not inherit the
   previous one's "don't ask me again". No token table was needed.
 - The page is a SQLAdmin `BaseView` with `@expose`, not an `entity_router`
   route, so it renders inside the admin chrome, gets a nav entry, and is
@@ -416,23 +416,23 @@ absorbed `User`.
 - Merge direction: keep the **older** user as the absorber, so the longer-lived
   `user.id` (referenced by feeds) survives.
 - After the identity list changes in Keycloak, cafe-car's `identity` rows are
-  stale until the next login on that provider. Accept that — the app-side table
+  stale until the next login on that provider. Accept that: the app-side table
   is a cache of what has actually been seen, and the page should say so rather
   than claiming to mirror Keycloak.
 
-## Phase 7 — Production cutover in deploy-gtfs-rt
+## Phase 7: Production cutover in deploy-gtfs-rt
 
 - [ ] Keycloak Deployment/Service/Ingress under `gtfs/keycloak/`, replacing
       `gtfs/dex/`; CNPG database `keycloak` alongside the existing `dex` one.
 - [ ] Realm config: prefer the same import JSON as dev, secrets via SOPS
       (`gtfs-app-secrets`), GitHub + Google + GitLab IdPs carried over.
 - [ ] Repoint oauth2-proxy (issuer, client id/secret, `USER_ID_CLAIM: sub`).
-- [ ] Repoint **Traccar's** OIDC client at Keycloak — it is a separate Dex
+- [ ] Repoint **Traccar's** OIDC client at Keycloak; it is a separate Dex
       client today and will break silently otherwise.
 - [x] Remap existing prod `identity` rows: for each, find the Keycloak user with
       the same GitHub identity and rewrite `(provider, provider_subject)` to
       `("keycloak", <kc sub>)`. Written as a one-shot script, not a migration,
-      since it needs to call the Keycloak admin API —
+      since it needs to call the Keycloak admin API:
       `scripts/remap_identities_to_keycloak.py`.
 - [ ] Flush Redis DB 0 (oauth2-proxy sessions) at cutover.
 - [ ] Keep the Dex manifests in git for one release as a rollback path.
@@ -454,7 +454,7 @@ absorbed `User`.
   `provider_subject` (Dex's GitHub connector and Keycloak's GitHub IdP key on
   the same GitHub account), falling back to an unambiguous **verified** email.
   It refuses to write if anything is unmatched, or if two rows would map to one
-  Keycloak subject — that second case is two cafe-car principals for one human,
+  Keycloak subject; that second case is two cafe-car principals for one human,
   which is a merge decision, not a remap. `--dry-run` is the default.
 - Exercised against the dev stack, where it correctly refused: three test users
   exist only in cafe-car, and four identities across three users all resolve to
@@ -462,24 +462,24 @@ absorbed `User`.
 
 **Gotchas**
 
-- The user count is small enough to remap by hand if the script is fiddly — but
+- The user count is small enough to remap by hand if the script is fiddly, but
   do it deliberately, because a missed row means someone silently gets a fresh
   empty account while their feeds stay attached to the orphaned user id.
 - Prod will hit the collision check if anyone has duplicate principals. Merge
   them via `/account` (or `merge_users` directly) *before* the cutover, not
-  after — after, the second row is unreachable.
+  after; once after, the second row is unreachable.
 - Import GitHub users into Keycloak *before* cutover if possible, so the first
   post-cutover login links rather than creates.
 - `DEX_ISSUER` appears in more places than the dex dir; grep the whole repo.
 
-## Phase 8 — Tests
+## Phase 8: Tests
 
 Done **before** Phase 6, so `merge_users` could be written test-first rather
 than verified by another scratchpad script. 77 tests, `uv run pytest`.
 
-- [x] `merge_users` — collision cases, ownership preservation, absorbed-user
+- [x] `merge_users`: collision cases, ownership preservation, absorbed-user
       cleanup.
-- [x] `accessible_feed_ids` — owner sees own, member sees shared, stranger sees
+- [x] `accessible_feed_ids`: owner sees own, member sees shared, stranger sees
       neither, across all five entity types.
 - [x] Ownership cannot be transferred by a member via a crafted `owner_id` POST.
 - [x] Invite claiming ignores unverified emails and is case-insensitive.
@@ -488,7 +488,7 @@ than verified by another scratchpad script. 77 tests, `uv run pytest`.
 
 **Discoveries**
 
-- **SQLite in memory, via `aiosqlite`** — the models are dialect-agnostic (no
+- **SQLite in memory, via `aiosqlite`**: the models are dialect-agnostic (no
   JSONB, arrays or enums), so `SQLModel.metadata.create_all` reproduces the
   schema and the suite needs no running service. Two things this does not
   cover, and which stay hand-verified against the dev database: the Alembic
@@ -499,13 +499,13 @@ than verified by another scratchpad script. 77 tests, `uv run pytest`.
   `PRAGMA foreign_keys=ON`, without which every cascade assertion passes
   vacuously.
 - **The suite immediately found a real bug.** Adding `Feed.invites` in Phase 5
-  reintroduced the exact trap Phase 4 hit with `Feed.members` — WTForms'
+  reintroduced the exact trap Phase 4 hit with `Feed.members`. WTForms'
   `process()` calls `hasattr()` across every attribute and lazy-loads it on a
   detached instance. The feed edit form had been raising
   `DetachedInstanceError` ever since. Fixed by excluding `invites` too.
 - The crafted-`owner_id` case needed **two** tests. `owner_id` is in
   `form_excluded_columns`, so WTForms never builds the field and the HTTP test
-  passes whether or not `update_model` still pops the key — it was verified
+  passes whether or not `update_model` still pops the key; it was verified
   vacuous by deleting the pop and watching the test still pass. A second test
   drives `update_model` directly with `owner_id` in the data; removing the pop
   fails that one, as it should.

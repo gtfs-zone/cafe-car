@@ -1,6 +1,6 @@
 {# The feed hub. There is no details page: this is the only page for a feed, so
    it carries the form, the read-only load status, and links to every object
-   beneath the feed. `obj` is the only handle on the model — the edit context has
+   beneath the feed. `obj` is the only handle on the model, and the edit context has
    no `model` key. Everything touched here must be eager loaded in
    FeedAdmin.form_edit_query; the session is closed before this renders. #}
 {% extends "sqladmin/edit.html" %}
@@ -102,7 +102,7 @@
         <thead><tr><th>Nickname</th><th>Rules</th></tr></thead>
         <tbody>
           {# Tracker.id is the Traccar credential and is deliberately not shown
-             here — it lives on the tracker's own page. #}
+             here; it lives on the tracker's own page. #}
           {% for tracker in obj.trackers %}
           <tr>
             <td><a href="/tracker/edit/{{ tracker.id }}">{{ tracker.nickname }}</a></td>
@@ -136,7 +136,7 @@
               {% if alert.active_period_start %}
               {% set iso = alert.active_period_start.strftime("%Y-%m-%dT%H:%M:%SZ") %}
               <time data-utc="{{ iso }}">{{ iso }}</time>
-              {% else %}<span class="text-muted">—</span>{% endif %}
+              {% else %}<span class="text-muted">-</span>{% endif %}
             </td>
           </tr>
           {% endfor %}

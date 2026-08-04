@@ -140,7 +140,7 @@ async def test_a_login_via_a_different_broker_updates_the_recorded_broker(
     session: AsyncSession,
 ) -> None:
     """Signing in via a second linked provider is current, positive
-    information — it must replace the stale broker from an earlier login,
+    information; it must replace the stale broker from an earlier login,
     not be silently discarded in its favor."""
     await resolve_login(
         session,

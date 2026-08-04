@@ -105,7 +105,7 @@ async def test_two_concurrent_vehicles_under_one_tracker_get_distinct_ids(
     make_client: ClientFactory, session: AsyncSession
 ) -> None:
     """The exact buswhere bug: one tracker, two live devices, neither carrying
-    a producer-supplied `vehicle_id` — the feed must still not reuse a
+    a producer-supplied `vehicle_id`; the feed must still not reuse a
     VehicleDescriptor.id across them."""
     owner = await make_user(session)
     feed = await make_feed(session, owner, "cc-feed")

@@ -1,6 +1,6 @@
 # cafe-car
 
-Core API for [GTFS.Zone](https://gtfs.zone) — serves GTFS-RT protobuf feeds and provides an admin UI for managing feeds and drivers.
+Core API for [GTFS.Zone](https://gtfs.zone): serves GTFS-RT protobuf feeds and provides an admin UI for managing feeds and drivers.
 
 Part of a larger stack; see [deploy-gtfs-rt](https://git.kcfam.us/gtfs.zone/deploy-gtfs-rt) for the full deployment.
 
@@ -11,8 +11,8 @@ GitHub OAuth
     └─> Dex (OIDC)
             └─> oauth2-proxy (ForwardAuth)
                     └─> Traefik
-                            ├─> Admin app  (manage.rt.<domain>) — auth-gated
-                            └─> Public API (rt.<domain>)        — no auth
+                            ├─> Admin app  (manage.rt.<domain>), auth-gated
+                            └─> Public API (rt.<domain>), no auth
                                     ├─> PostgreSQL (feeds, drivers, users)
                                     └─> Redis DB 1 (vehicle positions)
 
@@ -42,7 +42,7 @@ ACL rules:
 |----------|-------------|
 | `GET /{feed_name}/vehicle_positions.pb` | Live vehicle positions (GTFS-RT protobuf) |
 | `GET /{feed_name}/trip_updates.pb` | Trip updates from Redis (GTFS-RT protobuf) |
-| `GET /{feed_name}/service_alerts.pb` | Service alerts (stub — returns empty response) |
+| `GET /{feed_name}/service_alerts.pb` | Service alerts (stub, returns empty response) |
 | `POST /mqtt/auth` | MQTT broker auth hook (validates driver credentials) |
 | `GET /health` | Liveness check (pings Redis + Postgres) |
 

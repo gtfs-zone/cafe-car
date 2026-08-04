@@ -1,7 +1,7 @@
 {# Forked from sqladmin 0.23.0 (pinned in pyproject.toml). Diverges from upstream
    in three places, each marked "cafe-car:" below:
      1. the row-action <th>/<td> moved from second-from-left to last;
-     2. only the delete action survives — view is gone (can_view_details is False
+     2. only the delete action survives; view is gone (can_view_details is False
         on every ScopedModelView) and edit is reached by clicking the name column;
      3. relation cells link to admin:edit, since admin:details now 403s.
    Re-check this fork whenever the sqladmin pin moves. #}

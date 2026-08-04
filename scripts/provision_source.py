@@ -21,14 +21,14 @@ host checkout against the published ports instead of `docker compose exec`:
         --nickname "Amtrak NE Regional"
 
 Optional schedule-based trip resolution (not used by producers that post an
-explicit trip_id, e.g. hell-gate-bridge — but used by real Traccar devices):
+explicit trip_id, e.g. hell-gate-bridge, but used by real Traccar devices):
 
     ... --rule mon-fri=08:00-17:00=AMTK123 --rule sat,sun=10:00-14:00=AMTK199
 
 The owner defaults to `alice@local`, looked up by `User.primary_email`; that
 `User` row only exists after she has logged into the admin at least once
 (users are created lazily on first authenticated request, one per identity
-provider they've never used before — see `railroad_club.models.identity`).
+provider they've never used before, see `railroad_club.models.identity`).
 """
 
 from __future__ import annotations

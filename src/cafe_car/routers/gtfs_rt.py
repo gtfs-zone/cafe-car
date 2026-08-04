@@ -30,7 +30,7 @@ def _public_vehicle_id(
     """The GTFS-RT `VehicleDescriptor.id` for one vehicle record.
 
     A producer's own `vehicle_id` is trusted when given, but a producer with no
-    concept of a public per-vehicle id (or one that forgets to set it — this bit
+    concept of a public per-vehicle id (or one that forgets to set it, which bit
     a buswhere feed that ran several devices under one tracker credential) must
     not collapse every such vehicle onto the bare tracker nickname: GTFS-RT
     requires this id "unique per vehicle", and two concurrent vehicles sharing a
@@ -72,7 +72,7 @@ async def _build_trip_updates_feed(
     trackers = result.all()
 
     # A >24h daily trip has several instances of the same trip_id live at once,
-    # distinguished by start_date — so dedup on the pair, not trip_id alone.
+    # distinguished by start_date, so dedup on the pair, not trip_id alone.
     seen: set[tuple[str, str | None]] = set()
     for tracker in trackers:
         async for key in redis.scan_iter(f"vehicle:{tracker.id}:*"):
@@ -107,7 +107,7 @@ async def _build_trip_updates_feed(
             )
             if start_date:
                 entity.trip_update.trip.start_date = start_date
-            # Public per-vehicle id — never the secret tracker id.
+            # Public per-vehicle id, never the secret tracker id.
             entity.trip_update.vehicle.id = _public_vehicle_id(
                 tracker.nickname, trip_data.get("vehicle_id"), trip_id, start_date
             )
@@ -204,7 +204,7 @@ async def _build_vehicle_positions_feed(
             start_date = data.get("start_date")
             entity = msg.entity.add()
             # entity.id must be unique within the message, stable across polls, and
-            # free of the secret tracker id — and per GTFS-RT, so must the actual
+            # free of the secret tracker id, and per GTFS-RT, so must the actual
             # VehicleDescriptor.id below, so both share this derivation. One tracker
             # credential can carry many concurrent vehicles (Amtrak's fleet under
             # one id), so the tracker nickname is only a fallback for single-device
@@ -242,7 +242,7 @@ async def _build_vehicle_positions_feed(
                     entity.vehicle.trip.route_id = route_id
             # Where the vehicle is along its trip. current_status names the stop
             # in current_stop_sequence/stop_id, so all three are emitted together
-            # or not at all — this used to hardcode IN_TRANSIT_TO with no stop
+            # or not at all; this used to hardcode IN_TRANSIT_TO with no stop
             # reference, which says nothing and left consumers unable to place
             # the vehicle against the schedule. A producer that reports no
             # current stop leaves the fields absent: current_status is a proto2
@@ -298,7 +298,7 @@ async def _build_service_alerts_feed(
         .where(ServiceAlert.feed_id == feed.id)
         .options(selectinload(ServiceAlert.entities))
     )
-    # Shared with the feed catalog, which reports `has_alerts` — the two must
+    # Shared with the feed catalog, which reports `has_alerts`; the two must
     # never disagree about what this feed is publishing.
     published = active_alerts(result.all(), now)
 

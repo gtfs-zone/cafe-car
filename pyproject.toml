@@ -2,7 +2,7 @@
 name = "cafe-car"
 version = "0.1.0"
 requires-python = ">=3.13"
-description = "Core API for GTFS.Zone — serves GTFS-RT protobuf feeds and provides an admin UI"
+description = "Core API for GTFS.Zone: serves GTFS-RT protobuf feeds and provides an admin UI"
 dependencies = [
     "fastapi[standard]",
     "sqlmodel",
@@ -64,6 +64,6 @@ filterwarnings = [
     # The application uses `execute()` throughout deliberately (it returns Row
     # objects the scoped queries want), so the nag is pure noise that would
     # bury a warning worth reading.
-    # (?s) so `.` spans the message's newlines — it is a multi-line banner.
+    # (?s) so `.` spans the message's newlines, since it is a multi-line banner.
     "ignore:(?s).*You probably want to use `session.exec\\(\\)`.*:DeprecationWarning",
 ]

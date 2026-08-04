@@ -5,7 +5,7 @@ this server publishes, the four URLs needed to visualize it, and whether each
 realtime endpoint currently has anything in it.
 
 The liveness flags are computed the way the ``.pb`` serializers compute their
-payloads — a flag that disagrees with the feed it describes would be worse than
+payloads; a flag that disagrees with the feed it describes would be worse than
 no flag. Vehicles come from the ``vehicle:*`` keyspace, whose 60s TTL makes
 presence the same thing as freshness; trip updates are only published for a trip
 some live vehicle is running (``routers/gtfs_rt.py``), so they are looked up

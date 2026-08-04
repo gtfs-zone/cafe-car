@@ -1,7 +1,7 @@
 """Test database.
 
-SQLite in memory, not Postgres. The models are dialect-agnostic — no JSONB,
-arrays or enums — so ``SQLModel.metadata.create_all`` reproduces the schema
+SQLite in memory, not Postgres. The models are dialect-agnostic (no JSONB,
+arrays or enums), so ``SQLModel.metadata.create_all`` reproduces the schema
 faithfully enough for the logic under test, and the suite needs no running
 service. What it does *not* cover is the Alembic migrations; those keep being
 round-tripped against the dev database by hand.
@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-import railroad_club.models  # noqa: F401 — registers every table on the metadata
+import railroad_club.models  # noqa: F401 - registers every table on the metadata
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool

@@ -7,7 +7,7 @@ through, so the local DB can never hold the full list.
 
 Authenticates as a service account (client credentials) rather than reusing the
 caller's token, which keeps this independent of how oauth2-proxy passes tokens
-through — that differs between debug and production.
+through, since that differs between debug and production.
 """
 
 from __future__ import annotations

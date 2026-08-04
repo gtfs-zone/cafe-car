@@ -1,7 +1,7 @@
 """The signed-in person's own account page.
 
 A :class:`BaseView` rather than a route on ``entity_router`` so it renders
-inside the admin chrome and picks up a nav entry — and so ``@expose``'s
+inside the admin chrome and picks up a nav entry, and so ``@expose``'s
 ``login_required`` runs the auth backend for it. The two mutating routes it
 posts to live in ``entity_router`` alongside the other permission-checked
 actions.
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 # What the upstream identity provider is called, for the aliases the brokers
-# are configured under. An unknown alias is shown raw rather than hidden — a
+# are configured under. An unknown alias is shown raw rather than hidden: a
 # provider nobody has labelled yet is still worth seeing.
 BROKER_LABELS = {
     "github": "GitHub",

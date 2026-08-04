@@ -2,7 +2,7 @@
 
 Prod hostnames are hardcoded on purpose: the viz (test-track) and editor
 (coloring-book) URLs change often in local/dev, so linking to prod keeps this
-simple and stable. A feed created locally will not exist in prod viz/editor —
+simple and stable. A feed created locally will not exist in prod viz/editor;
 that is an accepted trade-off.
 
 URL schemes:

@@ -1,7 +1,7 @@
 """The public feed catalog, over ASGI.
 
 The first tests against the public app. ``ASGITransport`` never runs the
-lifespan, so nothing sets ``app.state.redis`` — the fake below stands in for it,
+lifespan, so nothing sets ``app.state.redis``; the fake below stands in for it,
 implementing only the three calls the router makes.
 """
 
@@ -32,7 +32,7 @@ class FakeRedis:
     """A dict with the three methods ``routers/catalog.py`` calls.
 
     Values are bytes, because the real client is opened without
-    ``decode_responses`` — which is exactly the detail a stringly-typed fake
+    ``decode_responses``, which is exactly the detail a stringly-typed fake
     would let a regression through on.
     """
 

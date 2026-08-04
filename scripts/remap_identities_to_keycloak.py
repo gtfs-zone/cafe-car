@@ -25,7 +25,7 @@ Anything unmatched aborts the run. A partial remap is worse than none: the
 people who were missed cannot tell that anything is wrong, they just find an
 empty account.
 
-Usage — dry run first, always:
+Usage (dry run first, always):
 
     uv run scripts/remap_identities_to_keycloak.py \\
         --keycloak-url https://id.gtfs.zone --realm gtfs \\
@@ -187,7 +187,7 @@ async def run(args: argparse.Namespace) -> int:
         planned: list[tuple[Identity, str, str]] = []
         unmatched: list[tuple[Identity, str]] = []
 
-        # Rows already pointing at a real Keycloak subject are done — this is
+        # Rows already pointing at a real Keycloak subject are done; this is
         # what makes the script safe to re-run after a partial cutover.
         known_subs = set(by_upstream.values()) | {
             sub for subs in by_email.values() for sub in subs
@@ -199,7 +199,7 @@ async def run(args: argparse.Namespace) -> int:
                 and identity.provider_subject in known_subs
             ):
                 logger.info(
-                    "  identity %-4s user %-4s already on Keycloak — skipping",
+                    "  identity %-4s user %-4s already on Keycloak, skipping",
                     identity.id,
                     identity.user_id,
                 )
@@ -233,7 +233,7 @@ async def run(args: argparse.Namespace) -> int:
             )
 
         # Two rows mapping to one Keycloak user would violate
-        # UNIQUE(provider, provider_subject) — and it means two cafe-car
+        # UNIQUE(provider, provider_subject), and it means two cafe-car
         # principals for one person, which is a merge decision, not a remap.
         by_sub: dict[str, list[Identity]] = {}
         for identity, sub, _ in planned:
@@ -242,7 +242,7 @@ async def run(args: argparse.Namespace) -> int:
         for sub, rows in collisions:
             logger.error(
                 "  COLLISION: Keycloak %s is claimed by identities %s "
-                "(users %s) — merge those users first (/account, or merge_users)",
+                "(users %s), merge those users first (/account, or merge_users)",
                 sub,
                 ", ".join(str(r.id) for r in rows),
                 ", ".join(str(uid) for uid in sorted({r.user_id for r in rows})),
@@ -275,7 +275,7 @@ async def run(args: argparse.Namespace) -> int:
         await session.commit()
         logger.info("\nRemapped %d identities.", len(planned))
         logger.info(
-            "Now flush oauth2-proxy's sessions (Redis DB 0) — every one of them "
+            "Now flush oauth2-proxy's sessions (Redis DB 0): every one of them "
             "references a Dex token."
         )
         return 0
