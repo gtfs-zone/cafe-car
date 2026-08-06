@@ -107,3 +107,20 @@
 {{ render_field(f, kwargs) }}
 {% endfor %}
 {% endmacro %}
+
+{# One render path for every button-shaped action in the admin: a plain
+   link, a POST-backed action (Reload), and a disabled placeholder all come
+   out of here so they can never drift into three different-looking
+   buttons. #}
+{% macro action_button(label, href=none, icon=none, style="primary", size="", method="get", disabled=false, title=none, new_tab=false) %}
+{% set classes = "btn btn-" ~ style ~ (" btn-" ~ size if size else "") %}
+{% if disabled or href is none %}
+<button type="button" class="{{ classes }}" disabled {% if title %}title="{{ title }}"{% endif %}>{% if icon %}<i class="fa-solid {{ icon }} me-1"></i>{% endif %}{{ label }}</button>
+{% elif method == "post" %}
+<form method="post" action="{{ href }}" class="d-inline">
+  <button type="submit" class="{{ classes }}" {% if title %}title="{{ title }}"{% endif %}>{% if icon %}<i class="fa-solid {{ icon }} me-1"></i>{% endif %}{{ label }}</button>
+</form>
+{% else %}
+<a href="{{ href }}" {% if new_tab %}target="_blank" rel="noopener noreferrer"{% endif %} class="{{ classes }}" {% if title %}title="{{ title }}"{% endif %}>{% if icon %}<i class="fa-solid {{ icon }} me-1"></i>{% endif %}{{ label }}</a>
+{% endif %}
+{% endmacro %}

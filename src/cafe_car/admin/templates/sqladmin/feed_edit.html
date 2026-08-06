@@ -4,6 +4,7 @@
    no `model` key. Everything touched here must be eager loaded in
    FeedAdmin.form_edit_query; the session is closed before this renders. #}
 {% extends "sqladmin/edit.html" %}
+{% import "sqladmin/_macros.html" as macros %}
 
 {% block content_header %}
 <div class="row g-2 align-items-center">
@@ -22,9 +23,7 @@
     <div class="card-header">
       <h3 class="card-title">Static GTFS</h3>
       <div class="ms-auto">
-        <form method="post" action="/feeds/{{ obj.id }}/reload" style="margin:0">
-          <button type="submit" class="btn btn-sm btn-secondary">&#8635; Reload</button>
-        </form>
+        {{ macros.action_button("Reload", href="/feeds/" ~ obj.id ~ "/reload", icon="fa-arrows-rotate", style="secondary", size="sm", method="post") }}
       </div>
     </div>
     <div class="card-body">
@@ -61,16 +60,11 @@
   <div class="card mt-3">
     <div class="card-header"><h3 class="card-title">Open in&hellip;</h3></div>
     <div class="card-body">
-      <a href="{{ viz_url(obj) }}" target="_blank" rel="noopener noreferrer"
-         class="btn btn-primary me-2">Open in viz &#8599;</a>
+      <span class="me-2 d-inline-block">
+        {{ macros.action_button("Open in viz", href=viz_url(obj), icon="fa-arrow-up-right-from-square", style="primary", new_tab=true) }}
+      </span>
       {% set edit_href = editor_url(obj) %}
-      {% if edit_href %}
-      <a href="{{ edit_href }}" target="_blank" rel="noopener noreferrer"
-         class="btn btn-secondary">Open in editor &#8599;</a>
-      {% else %}
-      <button class="btn btn-secondary" disabled
-              title="This feed has no static URL to load">Open in editor &#8599;</button>
-      {% endif %}
+      {{ macros.action_button("Open in editor", href=edit_href, icon="fa-arrow-up-right-from-square", style="secondary", disabled=(edit_href is none), title="This feed has no static URL to load" if edit_href is none else none, new_tab=true) }}
     </div>
   </div>
 </div>
@@ -94,7 +88,7 @@
       <h3 class="card-title">Trackers</h3>
       {# SQLAdmin's create route ignores query params and scaffold_form has no
          request, so the feed can't be pre-selected here. #}
-      <div class="ms-auto"><a href="/tracker/create" class="btn btn-sm btn-primary">+ New Tracker</a></div>
+      <div class="ms-auto">{{ macros.action_button("New Tracker", href="/tracker/create", icon="fa-plus", style="primary", size="sm") }}</div>
     </div>
     <div class="card-body">
       {% if obj.trackers %}
@@ -122,7 +116,7 @@
   <div class="card mt-3">
     <div class="card-header">
       <h3 class="card-title">Service Alerts</h3>
-      <div class="ms-auto"><a href="/service-alert/create" class="btn btn-sm btn-primary">+ New Alert</a></div>
+      <div class="ms-auto">{{ macros.action_button("New Alert", href="/service-alert/create", icon="fa-plus", style="primary", size="sm") }}</div>
     </div>
     <div class="card-body">
       {% if obj.alerts %}

@@ -23,7 +23,6 @@ if TYPE_CHECKING:
 
 from cafe_car.admin.access import accessible_feed_ids, owned_feed_ids
 from cafe_car.admin.context import current_user_id_var
-from cafe_car.admin.links import viz_url
 
 _STATUS_BADGE = {
     "pending": '<span class="badge bg-yellow">pending</span>',
@@ -124,15 +123,11 @@ class FeedAdmin(ScopedModelView, model=Feed):
         "access_badge",
         "load_status_badge",
         "last_loaded_at",
-        "viz_link",
-        "reload_action",
     ]
     column_labels: ClassVar[dict] = {
         "access_badge": "Access",
         "load_status_badge": "Status",
         "last_loaded_at": "Last Loaded",
-        "viz_link": "",
-        "reload_action": "",
     }
     column_formatters: ClassVar[dict] = {
         Feed.feed_name: lambda m, a: _link(f"/feed/edit/{m.id}", m.feed_name),
@@ -153,15 +148,6 @@ class FeedAdmin(ScopedModelView, model=Feed):
             _fmt_utc_dt(m.gtfs_static_feed.last_loaded_at)
             if m.gtfs_static_feed and m.gtfs_static_feed.last_loaded_at
             else Markup("-")
-        ),
-        "viz_link": lambda m, a: Markup(
-            f'<a href="{viz_url(m)}" target="_blank" rel="noopener noreferrer">'
-            f"Map &#8599;</a>"
-        ),
-        "reload_action": lambda m, a: Markup(
-            f'<form method="post" action="/feeds/{m.id}/reload" style="margin:0">'
-            f'<button type="submit" style="cursor:pointer">&#8635; Reload</button>'
-            f"</form>"
         ),
     }
     column_searchable_list: ClassVar[list] = [Feed.feed_name]

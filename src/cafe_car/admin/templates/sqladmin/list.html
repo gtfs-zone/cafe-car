@@ -6,6 +6,7 @@
      3. relation cells link to admin:edit, since admin:details now 403s.
    Re-check this fork whenever the sqladmin pin moves. #}
 {% extends "sqladmin/layout.html" %}
+{% import "sqladmin/_macros.html" as macros %}
 {% block content %}
 <div class="container-fluid">
   <div class="row">
@@ -42,9 +43,7 @@
                 {% endif %}
                 {% if model_view.can_create %}
                 <div class="ms-3 d-inline-block">
-                  <a href="{{ url_for('admin:create', identity=model_view.identity) }}" class="btn btn-primary">
-                    + New {{ model_view.name }}
-                  </a>
+                  {{ macros.action_button("New " ~ model_view.name, href=url_for('admin:create', identity=model_view.identity), icon="fa-plus", style="primary") }}
                 </div>
                 {% endif %}
               </div>
