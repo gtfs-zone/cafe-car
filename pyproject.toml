@@ -53,6 +53,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "TCH", "RUF"]
 [tool.commitizen]
 name = "cz_conventional_commits"
 tag_format = "v$version"
+annotated_tag = true
 version_provider = "uv"
 update_changelog_on_bump = true
 major_version_zero = true
