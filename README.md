@@ -1,38 +1,43 @@
 # cafe-car
 
-Core API for [GTFS.Zone](https://gtfs.zone): serves GTFS-RT protobuf feeds and provides an admin UI for managing feeds and drivers.
+Core API for [GTFS.Zone](https://gtfs.zone): serves GTFS-RT feeds and provides an admin UI for managing feeds, trackers and service alerts.
 
 Part of a larger stack; see [deploy-gtfs-rt](https://git.kcfam.us/gtfs.zone/deploy-gtfs-rt) for the full deployment.
 
 ### How it fits together
 
 ```
-GitHub OAuth
-    └─> Dex (OIDC)
+GitHub / Google / GitLab
+    └─> Keycloak (OIDC provider, brokers all three onto one account)
             └─> oauth2-proxy (ForwardAuth)
                     └─> Traefik
                             ├─> Admin app  (manage.rt.<domain>), auth-gated
                             └─> Public API (rt.<domain>), no auth
-                                    ├─> PostgreSQL (feeds, drivers, users)
-                                    └─> Redis DB 1 (vehicle positions)
+                                    ├─> PostgreSQL (feeds, trackers, alerts, users)
+                                    └─> Redis DB 1 (vehicle positions, trip updates)
 
-OwnTracks app (phone)
-    └─> NanoMQ (MQTT broker, bundled)
-            ├─> vehicle-poser         → Redis DB 1 (vehicle:{username} keys)
-            └─> trip-updogger        → Redis DB 1 (trip_update:{trip_id} keys)
+Traccar Client app (phone) / GPS unit
+    └─> Traccar (/osmand)
+            └─> vehicle-poser (HTTP forward)  → Redis DB 1 (vehicle:{tracker_id}:* keys)
+
+hell-gate-bridge (Amtrak, Columbia County)
+    └─> POST /ingest/position, /ingest/trip-update  → Redis DB 1
+
+trip-updogger
+    └─> sweeps vehicle:* + scheduled stop_times → Redis DB 1 (trip_update:{trip_id} keys)
 ```
 
-Vehicle positions (`vehicle:{username}`) are published by [vehicle-poser](https://git.kcfam.us/gtfs.zone/vehicle-poser) and trip delay data (`trip_update:{trip_id}`) by [trip-updogger](https://git.kcfam.us/gtfs.zone/trip-updogger), both via the NanoMQ MQTT broker bundled in this stack.
+There is no MQTT broker and no OwnTracks path any more: positions arrive over HTTP, either through [vehicle-poser](https://git.kcfam.us/gtfs.zone/vehicle-poser) (Traccar's forwarder) or directly on this service's `/ingest` API. Trip delays are written by [trip-updogger](https://git.kcfam.us/gtfs.zone/trip-updogger) and by upstream pollers.
 
 ---
 
-## NanoMQ broker
+## Trackers, not drivers
 
-A [NanoMQ](https://nanomq.io/) MQTT broker runs on port `1883` (configured via the deployment stack). Anonymous connections are disabled; authentication is delegated via HTTP POST to `/mqtt/auth` and ACL is checked via `/mqtt/acl` (both implemented by this service).
+A `Tracker` is one vehicle's credential. Its `id` is a secret pet-name (e.g. `gently-tender-oyster`) that doubles as the Traccar `uniqueId`, the Redis key namespace, and the `tracker_id` a producer posts under. There is no password. Creating a tracker in the admin auto-creates the matching Traccar device and renders a provisioning QR for the Traccar Client app.
 
-ACL rules:
-- Users may only **publish** to `owntracks/{their_username}/#`
-- All clients may **subscribe** to `owntracks/#`
+The `id` is never emitted in a feed. Vehicles are labelled with the tracker's public `nickname` instead.
+
+A `TrackerRule` binds a tracker to a `trip_id` on a day-of-week and time window, which is how vehicle-poser resolves an incoming position to a trip server-side.
 
 ---
 
@@ -42,11 +47,24 @@ ACL rules:
 |----------|-------------|
 | `GET /{feed_name}/vehicle_positions.pb` | Live vehicle positions (GTFS-RT protobuf) |
 | `GET /{feed_name}/trip_updates.pb` | Trip updates from Redis (GTFS-RT protobuf) |
-| `GET /{feed_name}/service_alerts.pb` | Service alerts (stub, returns empty response) |
-| `POST /mqtt/auth` | MQTT broker auth hook (validates driver credentials) |
+| `GET /{feed_name}/service_alerts.pb` | Service alerts from Postgres (GTFS-RT protobuf) |
+| `GET /{feed_name}/*.json` | The same three feeds as JSON, for browsers and debugging |
+| `GET /feeds` | Public feed catalog: every feed, its four URLs, and whether each realtime endpoint currently has anything in it |
 | `GET /health` | Liveness check (pings Redis + Postgres) |
 
-All endpoints are unauthenticated. Feed names are configured via the admin UI.
+All of the above are unauthenticated. Feeds are configured in the admin UI.
+
+### Ingest API
+
+Service-to-service, guarded by a shared bearer token (`INGEST_API_TOKEN`), for producers that already know their own `trip_id`:
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /ingest/position` | One vehicle position, written as a `vehicle:{tracker_id}:{slug}` record with a 60s TTL |
+| `POST /ingest/trip-update` | One trip's delay/stop-time predictions, 300s TTL |
+| `POST /ingest/alerts` | Replace a feed's producer-published service alerts |
+
+`GET /feed_urls` is internal-only: it refuses any request carrying `X-Forwarded-For`.
 
 ---
 
@@ -64,56 +82,61 @@ Run Postgres and Redis externally (e.g. via the deployment stack), then:
 
 ```bash
 uv sync
-uv run fastapi dev src/app/main.py    # public API  → http://localhost:8000
-uv run fastapi dev src/app/admin_main.py  # admin app → http://localhost:8001
+uv run fastapi dev src/cafe_car/main.py        # public API → http://localhost:8000
+uv run fastapi dev src/cafe_car/admin_main.py  # admin app  → http://localhost:8001
 ```
 
-To simulate oauth2-proxy headers locally:
+The admin app mounts at `/`, not at `/admin`. To simulate oauth2-proxy headers locally:
 
 ```bash
 curl -H "X-Auth-Request-User: alice" -H "X-Auth-Request-Email: alice@example.com" \
      http://localhost:8001/
 ```
 
+`X-Auth-Request-User` is the OIDC subject and is the only thing identifying the caller; the header alone creates the `User` and `Identity` on first use. Paths that need a *verified* email (invite claiming, account linking) also want a token: see CLAUDE.md for the unsigned-JWT recipe under `DEBUG=true`.
+
 ---
 
-## Testing vehicle positions
+## Testing a feed
 
-Two helper scripts are provided under `scripts/`:
+Helper scripts live under `scripts/`.
 
 ### `simulate_trip.py`
 
-Simulates a real GTFS trip along its shape, publishing vehicle positions to MQTT in OwnTracks format. The simulation starts at the position the bus would actually be at right now according to the GTFS schedule, with a random delay. The MQTT topic follows the OwnTracks convention: `owntracks/{driver}/{trip_id}`.
+Simulates real GTFS trips along their shapes, POSTing positions to `/ingest/position`. The simulation starts where the vehicle would actually be right now according to the schedule, with a random delay.
 
 ```bash
-# List available trips in the GTFS zip:
+# List what is in the GTFS zip:
+uv run scripts/simulate_trip.py --list-routes
 uv run scripts/simulate_trip.py --list-trips
 
-# Simulate trip WCCWB at 10x speed (default), publishing every 2s:
+# Simulate trip WCCWB at 10x speed, publishing every 2s:
 uv run scripts/simulate_trip.py --trip WCCWB
 
-# Custom driver credentials, speed and interval:
-uv run scripts/simulate_trip.py --driver bob --password bob \
-    --trip ELLSWB --speed 30 --interval 1
+# Every trip on a route, or N random trips, or the whole feed:
+uv run scripts/simulate_trip.py --route 1 --route 2
+uv run scripts/simulate_trip.py --n-trips 10 --speed 20
+uv run scripts/simulate_trip.py --all-trips --speed 50 --quiet
 
-# Custom delay range (seconds):
-uv run scripts/simulate_trip.py --min-delay 30 --max-delay 300 --delay-drift 10
+# Custom tracker, ingest endpoint, speed and interval:
+uv run scripts/simulate_trip.py --tracker <tracker-id> \
+    --ingest-url http://localhost:8000 --token dev-ingest-token \
+    --trip ELLSWB --speed 30 --interval 1
 ```
 
-The driver must exist in the database (created via the admin UI) and have a matching MQTT password for their positions to appear in the feed.
+The tracker must exist in the database (created via the admin UI), and the token must match `INGEST_API_TOKEN`, for the positions to appear in the feed.
 
-### `fetch_vehicles.py`
+### `provision_source.py`
 
-Fetches a `vehicle_positions.pb` endpoint and pretty-prints the result.
+Creates the row chain a producer needs (a `Feed` owned by an existing `User`, plus a `Tracker`), creates the matching Traccar device, and prints the tracker `id` to paste into the producer's env. Idempotent.
+
+### Feed inspectors
+
+`fetch_vehicles.py`, `fetch_trip_updates.py` and `fetch_service_alerts.py` each fetch one `.pb` endpoint and pretty-print it; `consumer_tool.py` does all three, and can follow a feed and map it.
 
 ```bash
-# Full protobuf dump (default)
-uv run scripts/fetch_vehicles.py <feed_name>
-
-# Compact one-line-per-vehicle table
-uv run scripts/fetch_vehicles.py <feed_name> --summary
-
-# Custom API base URL
+uv run scripts/fetch_vehicles.py <feed_name>            # full protobuf dump
+uv run scripts/fetch_vehicles.py <feed_name> --summary  # one line per vehicle
 uv run scripts/fetch_vehicles.py <feed_name> --backend http://localhost:8000
 ```
 
@@ -129,8 +152,7 @@ uv run ruff check src/          # lint
 uv run ruff check --fix src/    # lint + autofix
 uv run pytest                   # run tests
 
-# Alembic migrations
-uv run alembic revision --autogenerate -m "describe change"
-uv run alembic upgrade head
-uv run alembic downgrade -1
+# Apply migrations. Models and Alembic revisions live in railroad-club, which
+# ships the migrator as a console script; this repo has no alembic.ini.
+uv run railroad-club-migrate
 ```

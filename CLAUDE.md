@@ -4,7 +4,7 @@
 
 FastAPI service that:
 - Sits behind oauth2-proxy forward auth (Traefik middleware) using Keycloak as the OIDC provider, which brokers GitHub / Google / GitLab
-- Manages config data (Feeds, Trackers) in PostgreSQL via SQLModel + Alembic
+- Manages config data (Feeds, Trackers) in PostgreSQL via SQLModel; the models and their Alembic revisions come from railroad-club
 - Exposes GTFS-RT protobuf endpoints (`/<feed_name>/*.pb`) for trip updates, vehicle positions, and service alerts
 - Provides a scoped SQLAdmin interface at `/admin` where a user sees only the Feeds they own or have been given access to, and the Trackers beneath them
 
@@ -33,7 +33,7 @@ GitHub / Google / GitLab OAuth
                     └─> Traefik
                             ├─> FastAPI admin app (manage.rt.gtfs.zone), protected by oauth2-proxy
                             └─> FastAPI public API (rt.gtfs.zone), no auth required
-                                    ├─> PostgreSQL (SQLModel models, Alembic migrations)
+                                    ├─> PostgreSQL (railroad-club models + migrations)
                                     └─> Redis DB 1  (cache / RT data)
 ```
 
@@ -67,8 +67,8 @@ The public GTFS-RT endpoints (`rt.gtfs.zone`) have **no authentication middlewar
 
 There are two separate FastAPI apps sharing the same DB/Redis:
 
-- `src/app/main.py` → **public API** (`app = create_public_app()`): GTFS-RT protobuf endpoints (`/{feed_name}/trip_updates.pb`, `vehicle_positions.pb`, `service_alerts.pb`) + the HTTP ingest seam (`POST /ingest/position`, `POST /ingest/trip-update`). Run with `uv run fastapi dev src/app/main.py`.
-- `src/app/admin_main.py` → **admin app** (`app = create_admin_app()`): SQLAdmin interface mounted at `/`. Uses `OIDCAuthBackend`, `SessionMiddleware`, `DBSessionMiddleware`, and `SubjectMiddleware`. Run with `uv run fastapi dev src/app/admin_main.py`.
+- `src/cafe_car/main.py` → **public API** (`app = create_public_app()`): GTFS-RT endpoints (`/{feed_name}/trip_updates.pb`, `vehicle_positions.pb`, `service_alerts.pb`, plus a `.json` twin of each), the public feed catalog (`GET /feeds`) and the HTTP ingest seam (`POST /ingest/position`, `/ingest/trip-update`, `/ingest/alerts`). Run with `uv run fastapi dev src/cafe_car/main.py`.
+- `src/cafe_car/admin_main.py` → **admin app** (`app = create_admin_app()`): SQLAdmin interface mounted at `/`. Uses `OIDCAuthBackend`, `SessionMiddleware`, `DBSessionMiddleware`, and `SubjectMiddleware`. Run with `uv run fastapi dev src/cafe_car/admin_main.py`.
 
 The current user id flows via `request.session["user_id"]` and via `current_user_id_var` (`ContextVar`) for use in `scaffold_form`, where `request` is unavailable. The ContextVar is set inside `authenticate`, not in the middleware, because middleware runs *before* authentication, so it would otherwise lag a request behind and hand a switched-over browser the previous user's data.
 
@@ -89,20 +89,22 @@ exactly how the sharing UI shipped broken.
 
 ## Redis Data Format
 
-Vehicle positions are stored at key `vehicle:{tracker.id}` as JSON with fields: `tracker_id`, `lat`, `lon`, `bearing`, `speed`, `trip_id`, `route_id` (optional), `timestamp`. The `tracker_id` is the secret credential and is only a Redis-internal identifier; feeds label vehicles by the tracker's public `nickname`, resolved from the DB.
+Vehicle positions are stored at key `vehicle:{tracker.id}:{slug}`, one key per concurrent vehicle under that tracker, and read back with a `vehicle:{tracker.id}:*` scan. The slug is `{trip_id}` or `{trip_id}:{start_date}`, which is what keeps concurrent instances of one long-running daily trip apart. Each value is JSON with fields: `tracker_id`, `lat`, `lon`, `bearing`, `speed`, `trip_id`, `timestamp`, plus optional `route_id`, `start_date`, `vehicle_id`, `vehicle_label`, `current_stop_sequence`, `stop_id` and `current_status`; the serialiser reads every optional one with `.get()`, so a producer that predates a key just omits it. The `tracker_id` is the secret credential and is only a Redis-internal identifier; feeds label vehicles by the producer's public `vehicle_id`, falling back to the tracker's `nickname` from the DB.
 
-## Alembic Workflow
+Trip updates are stored at `trip_update:{trip_id}` or `trip_update:{trip_id}:{start_date}`. Positions carry a 60s TTL, trip updates 300s: a prediction stays valid for longer than the fix that produced it.
+
+## Migrations
+
+Models and Alembic revisions live in **railroad-club**, not here; this repo has
+no `alembic.ini`. Apply them with the console script railroad-club ships, which
+is also what the cluster's PreSync hook runs:
 
 ```bash
-# Generate a new migration after model changes
-uv run alembic revision --autogenerate -m "describe change"
-
-# Apply all pending migrations
-uv run alembic upgrade head
-
-# Downgrade one step
-uv run alembic downgrade -1
+uv run railroad-club-migrate
 ```
+
+A model change means a new revision in railroad-club, then a dependency bump
+here.
 
 ## Running Locally
 
@@ -115,16 +117,17 @@ SESSION_SECRET_KEY=some-random-secret-key
 
 ```bash
 uv sync
-uv run fastapi dev src/app/main.py
+uv run fastapi dev src/cafe_car/main.py        # public API → :8000
+uv run fastapi dev src/cafe_car/admin_main.py  # admin app  → :8001
 ```
 
 API docs: http://localhost:8000/docs
-Admin:    http://localhost:8000/admin
+Admin:    http://localhost:8001/ (SQLAdmin mounts at the root, not at /admin)
 
 To simulate oauth2-proxy headers locally:
 ```bash
 curl -H "X-Auth-Request-User: alice" -H "X-Auth-Request-Email: alice@example.com" \
-     http://localhost:8000/admin
+     http://localhost:8001/
 ```
 
 `X-Auth-Request-User` is the OIDC subject and is the only thing that identifies the caller; the header alone creates the `User` and `Identity` on first use. To simulate a *verified* email (needed for invite claiming and account linking, both of which refuse unverified addresses), set `DEBUG=true` and pass an unsigned JWT whose `sub` matches the header:
@@ -134,7 +137,7 @@ TOKEN=$(python3 -c "
 import base64, json
 b64 = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip('=')
 print(b64({'alg':'none'}) + '.' + b64({'sub':'alice','email':'alice@example.com','email_verified':True}) + '.x')")
-curl -H "X-Auth-Request-User: alice" -H "Authorization: Bearer $TOKEN" http://localhost:8000/account
+curl -H "X-Auth-Request-User: alice" -H "Authorization: Bearer $TOKEN" http://localhost:8001/account
 ```
 
 ## Environment Variables
