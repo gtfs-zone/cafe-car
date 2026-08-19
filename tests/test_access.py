@@ -19,7 +19,12 @@ from railroad_club.models.tracker import Tracker
 from railroad_club.models.tracker_rule import TrackerRule
 from sqlalchemy import select
 
-from cafe_car.admin.access import accessible_feed_ids, owned_feed_ids
+from cafe_car.admin.access import (
+    accessible_feed_ids,
+    member_feed_ids,
+    owned_feed_ids,
+)
+from cafe_car.admin.context import current_user_is_admin_var
 from tests.factories import add_member, make_feed, make_user
 
 if TYPE_CHECKING:
@@ -211,3 +216,76 @@ async def test_a_second_owners_feed_stays_invisible(session: AsyncSession) -> No
     bob_feed = await make_feed(session, bob, "bob-feed")
 
     assert await _visible_feed_ids(session, bob) == [bob_feed.id]
+
+
+class TestAdminBypass:
+    """The admin group sees everything, and only when the ContextVar says so.
+
+    The var is what `admin/auth.py` sets from a verified-subject token; these
+    tests drive it directly so the query behaviour is pinned independently of
+    how the claim is read.
+    """
+
+    async def test_admin_sees_a_feed_they_neither_own_nor_share(
+        self, session: AsyncSession, world: dict
+    ) -> None:
+        token = current_user_is_admin_var.set(True)
+        try:
+            assert await _visible_feed_ids(session, world["stranger"]) == [
+                world["feed"].id
+            ]
+        finally:
+            current_user_is_admin_var.reset(token)
+
+    async def test_admin_counts_as_owner_for_the_owner_only_actions(
+        self, session: AsyncSession, world: dict
+    ) -> None:
+        """Delete, transfer and member management gate on `owned_feed_ids`."""
+        token = current_user_is_admin_var.set(True)
+        try:
+            result = await session.execute(
+                select(Feed.id).where(Feed.id.in_(owned_feed_ids(world["stranger"].id)))
+            )
+            assert list(result.scalars().all()) == [world["feed"].id]
+        finally:
+            current_user_is_admin_var.reset(token)
+
+    async def test_the_bypass_reaches_entities_through_the_feed(
+        self, session: AsyncSession, world: dict
+    ) -> None:
+        token = current_user_is_admin_var.set(True)
+        try:
+            result = await session.execute(
+                select(Tracker).where(
+                    Tracker.feed_id.in_(accessible_feed_ids(world["stranger"].id))
+                )
+            )
+            assert [t.id for t in result.scalars().all()] == [world["tracker"].id]
+        finally:
+            current_user_is_admin_var.reset(token)
+
+    async def test_membership_is_not_widened(
+        self, session: AsyncSession, world: dict
+    ) -> None:
+        """`member_feed_ids` answers a question of fact, so it stays narrow.
+
+        Widening it would list every admin as a member of every feed in the
+        sharing panel.
+        """
+        token = current_user_is_admin_var.set(True)
+        try:
+            result = await session.execute(
+                select(Feed.id).where(
+                    Feed.id.in_(member_feed_ids(world["stranger"].id))
+                )
+            )
+            assert list(result.scalars().all()) == []
+        finally:
+            current_user_is_admin_var.reset(token)
+
+    async def test_default_is_not_admin(
+        self, session: AsyncSession, world: dict
+    ) -> None:
+        """Nothing having set the var must leave the ordinary scoping in place."""
+        assert current_user_is_admin_var.get() is False
+        assert await _visible_feed_ids(session, world["stranger"]) == []

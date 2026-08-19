@@ -12,8 +12,8 @@ from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from cafe_car.admin.account_view import AccountAdmin
-from cafe_car.admin.auth import OIDCAuthBackend
-from cafe_car.admin.context import current_user_id_var
+from cafe_car.admin.auth import OIDCAuthBackend, request_is_admin
+from cafe_car.admin.context import current_user_id_var, current_user_is_admin_var
 from cafe_car.admin.entity_router import router as entity_router
 from cafe_car.admin.links import editor_url, viz_url
 from cafe_car.admin.views import (
@@ -73,7 +73,15 @@ class SubjectMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         if request.url.path.startswith(STATICS_PREFIX):
             return await call_next(request)
+        # Both vars are set unconditionally, never merely when a value is
+        # found, so a request always starts from this request's own answer and
+        # can never observe a leftover from an earlier one.
+        #
+        # The user id is primed from the session and is a request behind, which
+        # `authenticate` corrects; admin is read from the token instead, because
+        # a cookie is not evidence of group membership.
         current_user_id_var.set(int(request.session.get("user_id") or 0))
+        current_user_is_admin_var.set(request_is_admin(request))
         return await call_next(request)
 
 

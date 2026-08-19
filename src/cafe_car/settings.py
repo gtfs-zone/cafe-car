@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     # Namespaces the `provider_subject` of an Identity. Keycloak is the issuer
     # oauth2-proxy talks to; a subject is only meaningful within one issuer.
     oidc_provider: str = "keycloak"
+    # Keycloak group whose members see and edit every feed, not just their own.
+    # Matched against the flat `groups` claim, which Keycloak maps with
+    # full.path=false, so this is the bare group name and not "/gtfs-admins".
+    # The same group gates Traccar entirely (openid.allowGroup there).
+    admin_group: str = "gtfs-admins"
     oauth2_proxy_logout_url: str = "/oauth2/sign_out"
     # Keycloak's self-serve Account Console, where a signed-in person adds
     # another provider. Keycloak owns linking, so it is also where linking is

@@ -8,6 +8,8 @@ uses; the Redis lifespan never runs, because ASGITransport does not start one.
 
 from __future__ import annotations
 
+import base64
+import json
 from datetime import time
 from typing import TYPE_CHECKING
 
@@ -566,3 +568,124 @@ async def test_the_account_page_explains_an_unverified_address(
 
     assert response.status_code == 200
     assert "cannot reach you" in response.text
+
+
+def _token(sub: str, groups: list[str] | None = None) -> str:
+    """An unsigned JWT, which is all `_decode_jwt_claims` ever reads.
+
+    Signature verification is oauth2-proxy's job; the app only base64-decodes
+    the payload, so the header and signature segments are placeholders.
+    """
+    claims: dict = {"sub": sub}
+    if groups is not None:
+        claims["groups"] = groups
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=")
+    return f"header.{payload.decode()}.signature"
+
+
+def _admin_headers(
+    subject: str,
+    email: str,
+    groups: list[str] | None = None,
+    token_sub: str | None = None,
+) -> dict[str, str]:
+    headers = _headers(subject, email)
+    headers["X-Auth-Request-Access-Token"] = _token(
+        token_sub or subject, ["gtfs-admins"] if groups is None else groups
+    )
+    return headers
+
+
+async def test_an_admin_reaches_a_feed_they_do_not_own(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    owner = await make_user(session, email="owner@example.com", subject="kc-owner")
+    await make_user(session, email="boss@example.com", subject="kc-boss")
+    feed = await make_feed(session, owner, "private-feed")
+
+    response = await client.get(
+        f"/feed/edit/{feed.id}",
+        headers=_admin_headers("kc-boss", "boss@example.com"),
+    )
+
+    assert response.status_code == 200
+    assert "private-feed" in response.text
+
+
+async def test_an_admin_sees_every_feed_in_the_list(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    owner = await make_user(session, email="owner@example.com", subject="kc-owner")
+    await make_user(session, email="boss@example.com", subject="kc-boss")
+    await make_feed(session, owner, "private-feed")
+
+    response = await client.get(
+        "/feed/list", headers=_admin_headers("kc-boss", "boss@example.com")
+    )
+
+    assert response.status_code == 200
+    assert "private-feed" in response.text
+    # Called out as an admin view rather than mislabelled "shared with me".
+    assert ">admin<" in response.text
+
+
+async def test_a_token_without_the_group_is_an_ordinary_user(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    owner = await make_user(session, email="owner@example.com", subject="kc-owner")
+    await make_user(session, email="nobody@example.com", subject="kc-nobody")
+    feed = await make_feed(session, owner, "private-feed")
+
+    response = await client.get(
+        f"/feed/edit/{feed.id}",
+        headers=_admin_headers(
+            "kc-nobody", "nobody@example.com", groups=["other-team"]
+        ),
+    )
+
+    assert response.status_code == 404
+
+
+async def test_a_token_for_someone_else_confers_no_admin(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """The subject-match guard is what stops a borrowed token granting admin.
+
+    A token whose `sub` is not the caller the proxy names is discarded whole, so
+    its `groups` claim never reaches the admin check.
+    """
+    owner = await make_user(session, email="owner@example.com", subject="kc-owner")
+    await make_user(session, email="nobody@example.com", subject="kc-nobody")
+    feed = await make_feed(session, owner, "private-feed")
+
+    response = await client.get(
+        f"/feed/edit/{feed.id}",
+        headers=_admin_headers(
+            "kc-nobody", "nobody@example.com", token_sub="kc-someone-else"
+        ),
+    )
+
+    assert response.status_code == 404
+
+
+async def test_admin_does_not_leak_into_the_next_request(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Each request re-derives the flag, so an admin's does not outlive it."""
+    owner = await make_user(session, email="owner@example.com", subject="kc-owner")
+    await make_user(session, email="boss@example.com", subject="kc-boss")
+    await make_user(session, email="nobody@example.com", subject="kc-nobody")
+    feed = await make_feed(session, owner, "private-feed")
+
+    admin_response = await client.get(
+        f"/feed/edit/{feed.id}", headers=_admin_headers("kc-boss", "boss@example.com")
+    )
+    assert admin_response.status_code == 200
+
+    # Same client, so the admin's session cookie is still in the jar.
+    response = await client.get(
+        f"/feed/edit/{feed.id}",
+        headers=_headers("kc-nobody", "nobody@example.com"),
+    )
+
+    assert response.status_code == 404

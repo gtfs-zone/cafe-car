@@ -5,6 +5,11 @@
   {% if message %}
   <div class="alert alert-success" role="alert">{{ message }}</div>
   {% endif %}
+  {% if is_admin_view %}
+  <div class="alert alert-warning" role="alert">
+    You are acting as an administrator on someone else's feed.
+  </div>
+  {% endif %}
 
   <div class="table-responsive mb-3">
     <table class="table table-vcenter table-bordered table-sm">

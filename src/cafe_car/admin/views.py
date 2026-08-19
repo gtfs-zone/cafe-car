@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
 from cafe_car.admin.access import accessible_feed_ids, owned_feed_ids
-from cafe_car.admin.context import current_user_id_var
+from cafe_car.admin.context import current_user_id_var, current_user_is_admin_var
 
 _STATUS_BADGE = {
     "pending": '<span class="badge bg-yellow">pending</span>',
@@ -90,6 +90,21 @@ def _link(href: str, label: object) -> Markup:
     return Markup(f'<a href="{escape(href)}">{escape(label)}</a>')
 
 
+def _access_badge(m: Feed) -> str:
+    """Owner / shared / admin badge for the feed list.
+
+    Formatters get no request, so read the per-request ContextVars. The admin
+    case is called out explicitly: an admin sees feeds that are neither theirs
+    nor shared with them, and "shared with me" would misdescribe those.
+    Deliberately not blue: a blue badge here read as a broken link.
+    """
+    if m.owner_id == current_user_id_var.get():
+        return '<span class="badge bg-green">owner</span>'
+    if current_user_is_admin_var.get():
+        return '<span class="badge bg-orange">admin</span>'
+    return '<span class="badge bg-secondary">shared with me</span>'
+
+
 class ScopedModelView(ModelView):
     """Every view in this admin is per-user scoped and has no details page:
     the edit page is the only page for an object, showing anything
@@ -133,11 +148,7 @@ class FeedAdmin(ScopedModelView, model=Feed):
         Feed.feed_name: lambda m, a: _link(f"/feed/edit/{m.id}", m.feed_name),
         # Formatters get no request, so read the per-request ContextVar.
         # Deliberately not blue: a blue badge here read as a broken link.
-        "access_badge": lambda m, a: Markup(
-            '<span class="badge bg-green">owner</span>'
-            if m.owner_id == current_user_id_var.get()
-            else '<span class="badge bg-secondary">shared with me</span>'
-        ),
+        "access_badge": lambda m, a: Markup(_access_badge(m)),
         "load_status_badge": lambda m, a: Markup(
             _STATUS_BADGE.get(
                 m.gtfs_static_feed.status if m.gtfs_static_feed else "",

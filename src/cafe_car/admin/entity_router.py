@@ -13,8 +13,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cafe_car.accounts import choose_absorber, link_candidates, merge_users
-from cafe_car.admin.access import accessible_feed_ids
-from cafe_car.admin.context import current_user_id_var
+from cafe_car.admin.access import accessible_feed_ids, owned_feed_ids
+from cafe_car.admin.auth import request_is_admin, request_subject
+from cafe_car.admin.context import current_user_id_var, current_user_is_admin_var
 from cafe_car.settings import get_settings
 from cafe_car.sharing import (
     list_members,
@@ -81,11 +82,15 @@ async def _current_user_id(request: Request) -> int:
     looked up afresh. Returns 0 (which matches no rows anywhere) rather than
     falling back to the cookie.
     """
-    subject = request.headers.get("X-Auth-Request-User") or request.headers.get(
-        "X-Forwarded-User"
-    )
+    subject = request_subject(request)
     if not subject:
+        current_user_is_admin_var.set(False)
         return 0
+    # Answered from the token on every path, never from the session: a cookie is
+    # not evidence of group membership, and these routes may see a stale one or
+    # none at all. `request_is_admin` applies the same subject-match guard the
+    # header does, so the identity and the admin flag rest on the same evidence.
+    current_user_is_admin_var.set(request_is_admin(request))
     cached = request.session.get("user_id")
     if cached and request.session.get("subject") == subject:
         return int(cached)
@@ -292,8 +297,14 @@ async def _load_accessible_feed(
 async def _load_owned_feed(
     session: AsyncSession, user_id: int, feed_id: int
 ) -> Feed | None:
+    """Gate for the owner-only actions: share, unshare, revoke, transfer.
+
+    Goes through `owned_feed_ids` rather than comparing `Feed.owner_id` here, so
+    that the admin bypass is defined once in `admin.access` and this path cannot
+    drift away from it.
+    """
     return await session.scalar(
-        select(Feed).where(Feed.owner_id == user_id, Feed.id == feed_id)
+        select(Feed).where(Feed.id.in_(owned_feed_ids(user_id)), Feed.id == feed_id)
     )
 
 
@@ -306,6 +317,7 @@ async def _render_members(
     error: str | None = None,
 ) -> HTMLResponse:
     owner = await session.get(User, feed.owner_id)
+    is_admin = current_user_is_admin_var.get()
     return templates.TemplateResponse(
         request,
         "sqladmin/_members_partial.html",
@@ -314,7 +326,13 @@ async def _render_members(
             "owner": owner,
             "members": await list_members(session, feed.id),
             "invites": await list_open_invites(session, feed.id),
-            "is_owner": feed.owner_id == user_id,
+            # Admins get the owner controls (share, remove, revoke, transfer)
+            # on feeds they do not own, matching what _load_owned_feed will
+            # actually let them post.
+            "is_owner": feed.owner_id == user_id or is_admin,
+            # True only when the owner controls are on offer because of the
+            # admin bypass, so the panel can say whose feed this really is.
+            "is_admin_view": is_admin and feed.owner_id != user_id,
             "current_user_id": user_id,
             "message": message,
             "error": error,
