@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     traccar_api_token: str | None = None
     traccar_email: str | None = None
     traccar_password: str | None = None
+    # Every auto-created device joins this Traccar group. Traccar scopes the
+    # device list per user via tc_user_device and being an administrator does
+    # NOT bypass that, so an admin sees nothing until something is shared with
+    # them. Sharing the group once per user covers every device forever, instead
+    # of one POST /api/permissions per device per user. Set empty to disable.
+    traccar_device_group: str = "All Vehicles"
     # Phone-reachable Traccar endpoint the Traccar Client posts to (osmand :5055).
     # Emitted as the `url=` param of the org.traccar.client://config deep link, so
     # it must be reachable from the driver's phone, not just the host.

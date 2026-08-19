@@ -34,9 +34,18 @@ class TraccarClient:
         email: str | None = None,
         password: str | None = None,
         timeout: float = 10.0,
+        device_group: str | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
+        self._transport = transport
+        # Every device this client creates joins this group. Traccar scopes the
+        # device list per user, and being an administrator does not change that,
+        # so admin visibility is one group link per user instead of one device
+        # link per user per device.
+        self._device_group = device_group
+        self._group_id: int | None = None
         self._headers: dict[str, str] = {}
         self._auth: httpx.BasicAuth | None = None
         if api_token:
@@ -50,6 +59,7 @@ class TraccarClient:
             headers=self._headers,
             auth=self._auth,
             timeout=self._timeout,
+            transport=self._transport,
         )
 
     async def get_device(self, unique_id: str) -> dict | None:
@@ -63,12 +73,50 @@ class TraccarClient:
                 return device
         return None
 
-    async def create_device(self, name: str, unique_id: str) -> dict:
-        """Create a device. Raises httpx.HTTPStatusError on failure."""
+    async def get_group(self, name: str) -> dict | None:
+        """Return the device group with the given name, or None if absent."""
         async with self._client() as client:
-            resp = await client.post(
-                "/api/devices", json={"name": name, "uniqueId": unique_id}
-            )
+            resp = await client.get("/api/groups")
+            resp.raise_for_status()
+            groups = resp.json()
+        for group in groups:
+            if group.get("name") == name:
+                return group
+        return None
+
+    async def ensure_group(self, name: str) -> int:
+        """Idempotently ensure the device group exists; return its id.
+
+        Memoised on the client: the group is created once and never renamed, so
+        a single lookup per process is enough.
+        """
+        if self._group_id is not None:
+            return self._group_id
+        group = await self.get_group(name)
+        if group is None:
+            async with self._client() as client:
+                resp = await client.post("/api/groups", json={"name": name})
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError:
+                    # Lost a create race with another worker.
+                    group = await self.get_group(name)
+                    if group is None:
+                        raise
+                else:
+                    group = resp.json()
+        self._group_id = group["id"]
+        return self._group_id
+
+    async def create_device(
+        self, name: str, unique_id: str, *, group_id: int | None = None
+    ) -> dict:
+        """Create a device. Raises httpx.HTTPStatusError on failure."""
+        payload: dict = {"name": name, "uniqueId": unique_id}
+        if group_id is not None:
+            payload["groupId"] = group_id
+        async with self._client() as client:
+            resp = await client.post("/api/devices", json=payload)
             resp.raise_for_status()
             return resp.json()
 
@@ -77,8 +125,20 @@ class TraccarClient:
         existing = await self.get_device(unique_id)
         if existing is not None:
             return existing
+        group_id = None
+        if self._device_group:
+            try:
+                group_id = await self.ensure_group(self._device_group)
+            except httpx.HTTPError:
+                # Grouping is a visibility convenience; never block provisioning
+                # on it. The device is still created, just ungrouped.
+                logger.warning(
+                    "could not resolve Traccar group %r; creating %r ungrouped",
+                    self._device_group,
+                    unique_id,
+                )
         try:
-            return await self.create_device(name, unique_id)
+            return await self.create_device(name, unique_id, group_id=group_id)
         except httpx.HTTPStatusError:
             # Lost a create race, or Traccar rejected a duplicate uniqueId.
             existing = await self.get_device(unique_id)
@@ -95,6 +155,7 @@ def get_traccar_client() -> TraccarClient:
         api_token=settings.traccar_api_token,
         email=settings.traccar_email,
         password=settings.traccar_password,
+        device_group=settings.traccar_device_group,
     )
 
 
