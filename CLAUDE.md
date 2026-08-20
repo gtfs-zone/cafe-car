@@ -70,6 +70,26 @@ There are two separate FastAPI apps sharing the same DB/Redis:
 - `src/cafe_car/main.py` → **public API** (`app = create_public_app()`): GTFS-RT endpoints (`/{feed_name}/trip_updates.pb`, `vehicle_positions.pb`, `service_alerts.pb`, plus a `.json` twin of each), the public feed catalog (`GET /feeds`) and the HTTP ingest seam (`POST /ingest/position`, `/ingest/trip-update`, `/ingest/alerts`). Run with `uv run fastapi dev src/cafe_car/main.py`.
 - `src/cafe_car/admin_main.py` → **admin app** (`app = create_admin_app()`): SQLAdmin interface mounted at `/`. Uses `OIDCAuthBackend`, `SessionMiddleware`, `DBSessionMiddleware`, and `SubjectMiddleware`. Run with `uv run fastapi dev src/cafe_car/admin_main.py`.
 
+The admin app also serves `src/cafe_car/api/` at `/api`, which is
+[yard-master](https://git.kcfam.us/gtfs.zone/yard-master)'s JSON API. It is
+mounted here rather than on the public app so it inherits the oauth2-proxy
+headers, the DB session and the identity resolution the admin already has, and
+it is included **before** `Admin`, for the same reason `entity_router` is: the
+mount at `/` swallows anything registered after it.
+
+Rules for anything added under `/api`:
+
+- Every response is built from an explicit model in `api/schemas.py`, never by
+  dumping an ORM object. `TrackerOut` has no `id`; `TrackerDetailOut` does, and
+  only the tracker detail and provisioning endpoints may return it.
+- Every feed-scoped route depends on `api/deps.py::accessible_feed`, and a feed
+  the caller cannot see answers **404, not 403**, so no id is confirmed.
+- `require_csrf` is a dependency of the whole router, so every mutation carries
+  `X-Yard-Master` without a route having to remember.
+- `GET /api/feeds` scopes through `personal_feed_ids`, which does not apply the
+  admin bypass; `?all=1` is how an admin opts in, and it is refused to everyone
+  else.
+
 The current user id flows via `request.session["user_id"]` and via `current_user_id_var` (`ContextVar`) for use in `scaffold_form`, where `request` is unavailable. The ContextVar is set inside `authenticate`, not in the middleware, because middleware runs *before* authentication, so it would otherwise lag a request behind and hand a switched-over browser the previous user's data.
 
 **There are no details pages.** Every view subclasses `ScopedModelView`, which

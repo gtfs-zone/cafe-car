@@ -23,6 +23,7 @@ from cafe_car.admin.views import (
     TrackerAdmin,
     TrackerRuleAdmin,
 )
+from cafe_car.api import router as api_router
 from cafe_car.database import get_engine, get_session_factory
 from cafe_car.settings import get_settings
 
@@ -111,9 +112,12 @@ def create_admin_app() -> FastAPI:
     app.add_middleware(SubjectMiddleware)
     app.add_middleware(SessionMiddleware, secret_key=settings.session_secret_key)
 
-    # Register entity router BEFORE Admin, because Admin mounts at "/" which
+    # Register both routers BEFORE Admin, because Admin mounts at "/" which
     # would otherwise swallow all requests before these routes are reached.
     app.include_router(entity_router)
+    # yard-master's JSON API. Shares this app's middleware and therefore its
+    # oauth2-proxy headers, its DB session and its identity resolution.
+    app.include_router(api_router)
 
     auth_backend = OIDCAuthBackend(secret_key=settings.session_secret_key)
     templates_dir = str(Path(__file__).parent / "admin" / "templates")

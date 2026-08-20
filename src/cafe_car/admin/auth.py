@@ -2,7 +2,10 @@ import base64
 import json
 import logging
 
+from railroad_club.models.identity import Identity
 from sqladmin.authentication import AuthenticationBackend
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
@@ -82,6 +85,39 @@ def request_is_admin(request: Request) -> bool:
     routes outside SQLAdmin may see a stale one or none at all.
     """
     return claims_are_admin(verified_claims(request))
+
+
+async def resolve_request_user_id(request: Request, session: AsyncSession) -> int:
+    """Who is calling, for routes that SQLAdmin's `authenticate` never ran for.
+
+    The hand-written routes (`admin/entity_router.py`, `cafe_car/api`) sit
+    outside SQLAdmin, so nothing has resolved an identity for them and the
+    session cookie may be stale or belong to whoever used this browser last.
+    The proxy header is the authority: the cached session id is used only when
+    it agrees with the header, and otherwise the identity is looked up afresh.
+    Returns 0 (which matches no rows anywhere) rather than falling back to the
+    cookie.
+
+    Sets `current_user_is_admin_var` as a side effect, from the token on every
+    path and never from the session: a cookie is not evidence of group
+    membership. `request_is_admin` applies the same subject-match guard the
+    header does, so the identity and the admin flag rest on the same evidence.
+    """
+    subject = request_subject(request)
+    if not subject:
+        current_user_is_admin_var.set(False)
+        return 0
+    current_user_is_admin_var.set(request_is_admin(request))
+    cached = request.session.get("user_id")
+    if cached and request.session.get("subject") == subject:
+        return int(cached)
+    user_id = await session.scalar(
+        select(Identity.user_id).where(
+            Identity.provider == get_settings().oidc_provider,
+            Identity.provider_subject == subject,
+        )
+    )
+    return int(user_id or 0)
 
 
 class OIDCAuthBackend(AuthenticationBackend):

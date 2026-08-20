@@ -65,6 +65,20 @@ def member_feed_ids(user_id: int) -> Select[tuple[int]]:
     return select(FeedMember.feed_id).where(FeedMember.user_id == user_id)
 
 
+def personal_feed_ids(user_id: int) -> Select[tuple[int]]:
+    """Feeds that are this user's own: owned by them or shared with them.
+
+    The admin bypass is deliberately *not* applied. This answers "whose feeds
+    are these", which is the question a feed switcher asks: an admin who saw
+    every feed on the server by default would never find their own. The API's
+    ``GET /feeds`` uses this, and ``?all=1`` is how an admin opts into the
+    bypass explicitly.
+    """
+    return select(Feed.id).where(
+        or_(Feed.owner_id == user_id, Feed.id.in_(member_feed_ids(user_id)))
+    )
+
+
 def accessible_feed_ids(user_id: int) -> Select[tuple[int]]:
     """Feeds this user may read and edit: owned or shared with them.
 
@@ -74,6 +88,4 @@ def accessible_feed_ids(user_id: int) -> Select[tuple[int]]:
     """
     if _is_admin():
         return select(Feed.id)
-    return select(Feed.id).where(
-        or_(Feed.owner_id == user_id, Feed.id.in_(member_feed_ids(user_id)))
-    )
+    return personal_feed_ids(user_id)

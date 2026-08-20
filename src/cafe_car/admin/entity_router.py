@@ -4,7 +4,6 @@ from fastapi import APIRouter, Form, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from railroad_club.models.feed import Feed
-from railroad_club.models.identity import Identity
 from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
 from railroad_club.models.tracker import Tracker
@@ -14,9 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cafe_car.accounts import choose_absorber, link_candidates, merge_users
 from cafe_car.admin.access import accessible_feed_ids, owned_feed_ids
-from cafe_car.admin.auth import request_is_admin, request_subject
+from cafe_car.admin.auth import resolve_request_user_id
 from cafe_car.admin.context import current_user_id_var, current_user_is_admin_var
-from cafe_car.settings import get_settings
 from cafe_car.sharing import (
     list_members,
     list_open_invites,
@@ -73,35 +71,8 @@ _ROUTE_TYPE_LABELS = {
 
 
 async def _current_user_id(request: Request) -> int:
-    """Who is calling, according to oauth2-proxy.
-
-    These routes sit outside SQLAdmin, so nothing has run `authenticate` for
-    them and the session cookie may be stale or belong to whoever used this
-    browser last. The proxy header is the authority: the cached session id is
-    used only when it agrees with the header, and otherwise the identity is
-    looked up afresh. Returns 0 (which matches no rows anywhere) rather than
-    falling back to the cookie.
-    """
-    subject = request_subject(request)
-    if not subject:
-        current_user_is_admin_var.set(False)
-        return 0
-    # Answered from the token on every path, never from the session: a cookie is
-    # not evidence of group membership, and these routes may see a stale one or
-    # none at all. `request_is_admin` applies the same subject-match guard the
-    # header does, so the identity and the admin flag rest on the same evidence.
-    current_user_is_admin_var.set(request_is_admin(request))
-    cached = request.session.get("user_id")
-    if cached and request.session.get("subject") == subject:
-        return int(cached)
-    session: AsyncSession = request.state.session
-    user_id = await session.scalar(
-        select(Identity.user_id).where(
-            Identity.provider == get_settings().oidc_provider,
-            Identity.provider_subject == subject,
-        )
-    )
-    return int(user_id or 0)
+    """Who is calling. One definition, shared with `cafe_car.api`."""
+    return await resolve_request_user_id(request, request.state.session)
 
 
 async def _may_touch_alert(session: AsyncSession, user_id: int, alert_id: int) -> bool:
