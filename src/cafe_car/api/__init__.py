@@ -16,7 +16,7 @@ routes, so a mutation added in a later phase cannot forget it.
 
 from fastapi import APIRouter, Depends
 
-from cafe_car.api import alerts, events, feeds, members, trackers
+from cafe_car.api import alerts, events, feeds, members, positions, trackers
 from cafe_car.api.deps import require_csrf
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_csrf)])
@@ -25,5 +25,6 @@ router.include_router(trackers.router)
 router.include_router(alerts.router)
 router.include_router(members.router)
 router.include_router(events.router)
+router.include_router(positions.router)
 
 __all__ = ["router"]

@@ -14,37 +14,12 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from cafe_car.alerts import active_alerts, to_utc
 from cafe_car.database import get_session
+from cafe_car.vehicle_payload import public_vehicle_id
 
 router = APIRouter()
 
 PROTOBUF_CONTENT_TYPE = "application/x-protobuf"
 JSON_CONTENT_TYPE = "application/json"
-
-
-def _public_vehicle_id(
-    tracker_nickname: str,
-    public_id: str | None,
-    trip_id: str | None,
-    start_date: str | None,
-) -> str:
-    """The GTFS-RT `VehicleDescriptor.id` for one vehicle record.
-
-    A producer's own `vehicle_id` is trusted when given, but a producer with no
-    concept of a public per-vehicle id (or one that forgets to set it, which bit
-    a buswhere feed that ran several devices under one tracker credential) must
-    not collapse every such vehicle onto the bare tracker nickname: GTFS-RT
-    requires this id "unique per vehicle", and two concurrent vehicles sharing a
-    tracker would otherwise share this id too. Folding in the trip instance
-    (trip_id + start_date, the same disambiguator used for `entity.id`) restores
-    uniqueness for any concurrently-running vehicles, without requiring every
-    producer to invent its own scheme.
-    """
-    if public_id:
-        return public_id
-    if trip_id:
-        instance = f"{trip_id}:{start_date}" if start_date else trip_id
-        return f"{tracker_nickname}:{instance}"
-    return tracker_nickname
 
 
 async def get_feed(
@@ -108,7 +83,7 @@ async def _build_trip_updates_feed(
             if start_date:
                 entity.trip_update.trip.start_date = start_date
             # Public per-vehicle id, never the tracker's device_key.
-            entity.trip_update.vehicle.id = _public_vehicle_id(
+            entity.trip_update.vehicle.id = public_vehicle_id(
                 tracker.nickname, trip_data.get("vehicle_id"), trip_id, start_date
             )
             entity.trip_update.timestamp = trip_data["timestamp"]
@@ -210,7 +185,7 @@ async def _build_vehicle_positions_feed(
             # a fallback for single-device producers, folded with the trip instance
             # when there are several.
             public_id = data.get("vehicle_id")
-            vehicle_id = _public_vehicle_id(
+            vehicle_id = public_vehicle_id(
                 tracker.nickname, public_id, trip_id, start_date
             )
             entity.id = vehicle_id

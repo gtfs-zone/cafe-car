@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, model_validator
+from railroad_club.feed_events import feed_channel, position_event
 from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
 from railroad_club.models.tracker import Tracker
@@ -30,6 +31,7 @@ from cafe_car.alert_enums import (  # noqa: TC001
 )
 from cafe_car.database import get_session
 from cafe_car.settings import get_settings
+from cafe_car.vehicle_payload import redis_key, vehicle_view
 
 if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession
@@ -164,14 +166,6 @@ class AlertsSyncIngest(BaseModel):
     alerts: list[AlertIngest]
 
 
-def _vehicle_key(tracker_id: str, trip_id: str, start_date: str | None) -> str:
-    # Appending start_date (when present) gives concurrent instances of one
-    # long-running daily trip distinct keys. The `vehicle:{tracker_id}:*` scan in
-    # gtfs_rt.py still matches.
-    slug = f"{trip_id}:{start_date}" if start_date else trip_id
-    return f"vehicle:{tracker_id}:{slug}"
-
-
 def _trip_update_key(trip_id: str, start_date: str | None) -> str:
     if start_date:
         return f"trip_update:{trip_id}:{start_date}"
@@ -193,6 +187,7 @@ async def ingest_position(
     body: PositionIngest,
     request: Request,
     authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> dict[str, str]:
     _check_auth(authorization)
 
@@ -226,8 +221,25 @@ async def ingest_position(
     if body.current_status:
         record["current_status"] = body.current_status
 
-    key = _vehicle_key(body.tracker_id, body.trip_id, body.start_date)
-    await request.app.state.redis.setex(key, POSITION_TTL, json.dumps(record))
+    redis = request.app.state.redis
+    key = redis_key(body.tracker_id, body.trip_id, body.start_date)
+    await redis.setex(key, POSITION_TTL, json.dumps(record))
+
+    # Push the fix to whoever is watching this feed's channel. The record knows
+    # a tracker and not a feed, so this costs one lookup by primary key per fix;
+    # that is the price of a live map, and the tracker is what supplies the
+    # nickname the vehicle is labelled with anyway.
+    #
+    # A tracker_id that resolves to nothing is stored and not published rather
+    # than rejected: the token is what authorises ingest, the serving side only
+    # ever scans the trackers it knows, and a producer configured with a stale
+    # id has always been allowed to write into a namespace nobody reads.
+    tracker = await session.get(Tracker, body.tracker_id)
+    if tracker is not None:
+        view = vehicle_view(tracker.id, tracker.nickname, record)
+        await redis.publish(
+            feed_channel(tracker.feed_id), json.dumps(position_event(view))
+        )
     return {"status": "ok"}
 
 

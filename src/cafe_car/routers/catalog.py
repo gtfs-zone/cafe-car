@@ -35,6 +35,7 @@ from sqlmodel import select
 from cafe_car.alerts import active_alerts
 from cafe_car.database import get_session
 from cafe_car.feed_urls import feed_rt_urls
+from cafe_car.vehicle_payload import live_vehicle_keys
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -47,11 +48,6 @@ router = APIRouter()
 # trade for not doing that per page-load.
 CACHE_CONTROL = "public, max-age=30"
 
-# SCAN's per-call hint. Larger than the default 10 because the vehicle keyspace
-# is small and one round trip per ten keys is the slow part here.
-SCAN_COUNT = 500
-
-
 class FeedCatalogEntry(BaseModel):
     """One feed, as a consumer needs to see it."""
 
@@ -63,29 +59,6 @@ class FeedCatalogEntry(BaseModel):
     has_vehicles: bool
     has_trip_updates: bool
     has_alerts: bool
-
-
-def _key(raw: bytes | str) -> str:
-    """Redis is opened without ``decode_responses``, so keys arrive as bytes."""
-    return raw.decode() if isinstance(raw, bytes) else raw
-
-
-async def _live_vehicle_keys(redis: Redis) -> dict[str, list[str]]:
-    """Every live vehicle key, grouped by the tracker that owns it.
-
-    One pass over ``vehicle:*`` for the whole request. ``gtfs_rt.py`` scans once
-    per tracker, which is fine when it is serving a single feed; here that would
-    walk the keyspace once per tracker across every feed on the server.
-    """
-    by_tracker: dict[str, list[str]] = defaultdict(list)
-    async for raw in redis.scan_iter(match="vehicle:*", count=SCAN_COUNT):
-        key = _key(raw)
-        # vehicle:{tracker_id}:{trip_id}[:{start_date}]
-        parts = key.split(":")
-        if len(parts) < 3:
-            continue
-        by_tracker[parts[1]].append(key)
-    return by_tracker
 
 
 async def _any_trip_update(redis: Redis, vehicle_keys: list[str]) -> bool:
@@ -138,7 +111,7 @@ async def list_feeds(
     ):
         alerts_by_feed[alert.feed_id].append(alert)
 
-    live = await _live_vehicle_keys(redis)
+    live = await live_vehicle_keys(redis)
 
     entries: list[FeedCatalogEntry] = []
     for feed in feeds:
