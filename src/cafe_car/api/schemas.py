@@ -28,6 +28,8 @@ from pydantic import (
 
 # Runtime imports: pydantic resolves these annotations when it builds the
 # alert models, so a TYPE_CHECKING block would break them.
+from railroad_club.models.tracker_rule import ExceptionType
+
 from cafe_car.alert_enums import (
     AlertCause,
     AlertEffect,
@@ -496,3 +498,67 @@ class ShareOut(BaseModel):
 
     kind: str
     message: str
+
+
+class TrackerRuleWrite(BaseModel):
+    """A recurrence rule, as the calendar writes it.
+
+    ``start_time``/``end_time`` are seconds since service midnight, so an
+    ``end_time`` past 86400 is a window running into the next calendar day and
+    is the only way an overnight trip is expressible. They are never a clock
+    time in a zone: the service date the window starts on is what carries the
+    date, and that date is the trip's GTFS-RT ``start_date``.
+
+    No weekday is required. A rule with every flag false and a single ``added``
+    exception is a one-off assignment, which is a thing the calendar has to be
+    able to write.
+    """
+
+    trip_id: str
+    monday: bool = False
+    tuesday: bool = False
+    wednesday: bool = False
+    thursday: bool = False
+    friday: bool = False
+    saturday: bool = False
+    sunday: bool = False
+    start_date: date
+    end_date: date | None = None
+    start_time: int
+    end_time: int
+
+    @field_validator("trip_id")
+    @classmethod
+    def check_trip_id(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("A rule needs a trip")
+        if len(v) > 256:
+            raise ValueError("A trip id is at most 256 characters")
+        return v
+
+    @model_validator(mode="after")
+    def check_window(self) -> TrackerRuleWrite:
+        if self.start_time < 0:
+            raise ValueError("A start time cannot be before service midnight")
+        if self.end_time <= self.start_time:
+            raise ValueError("The window ends before it starts")
+        # Two service days is the most the resolver ever evaluates, so a longer
+        # window could never be matched in full and is a typo rather than a run.
+        if self.end_time > 2 * 86400:
+            raise ValueError("A window is at most 48 hours long")
+        if self.end_date is not None and self.end_date < self.start_date:
+            raise ValueError("The rule ends before it starts")
+        return self
+
+
+class RuleExceptionWrite(BaseModel):
+    """One service date added to or removed from a rule.
+
+    ``added`` makes the rule run on a date its weekday flags exclude, and
+    ``removed`` cancels it on one they include. Neither reaches outside the
+    rule's date range, which is what "this rule is over" means.
+    """
+
+    date: date
+    exception_type: ExceptionType

@@ -14,6 +14,13 @@ its ownership. Deleting is too, and it takes the Traccar device with it.
 the client re-implement the recurrence logic. The expansion itself lives in
 ``railroad_club.trip_resolver`` next to ``resolve_tracker_trip``, so the
 calendar and the resolver cannot disagree about which day a rule runs.
+
+The rules themselves are written here too. A rule has no feed column of its
+own - it belongs to a tracker, and the tracker belongs to the feed - so every
+rule route scopes through that join rather than trusting an id in the path. A
+rule is one tracker on one trip: the tracker is fixed at creation, the trip and
+the recurrence are editable, and one date's departure from the recurrence is an
+exception rather than a second rule.
 """
 
 from __future__ import annotations
@@ -34,11 +41,13 @@ from cafe_car.api.schemas import (
     AssignmentOut,
     ProvisioningOut,
     RuleExceptionOut,
+    RuleExceptionWrite,
     TrackerBulkCreate,
     TrackerCreate,
     TrackerDetailOut,
     TrackerOut,
     TrackerRuleOut,
+    TrackerRuleWrite,
     TrackerUpdate,
 )
 from cafe_car.traccar import build_config_url, provision_device, qr_svg, retire_device
@@ -324,35 +333,208 @@ def _exception_dates(
     }
 
 
+def _rule_out(
+    rule: TrackerRule, exceptions: list[TrackerRuleException]
+) -> TrackerRuleOut:
+    return TrackerRuleOut(
+        id=rule.id,
+        tracker_id=rule.tracker_id,
+        trip_id=rule.trip_id,
+        monday=rule.monday,
+        tuesday=rule.tuesday,
+        wednesday=rule.wednesday,
+        thursday=rule.thursday,
+        friday=rule.friday,
+        saturday=rule.saturday,
+        sunday=rule.sunday,
+        start_date=rule.start_date,
+        end_date=rule.end_date,
+        start_time=rule.start_time,
+        end_time=rule.end_time,
+        exceptions=[
+            RuleExceptionOut(
+                id=exc.id, date=exc.date, exception_type=exc.exception_type
+            )
+            for exc in exceptions
+        ],
+    )
+
+
+async def _rule_exceptions(
+    session: DBSession, rule_id: int
+) -> list[TrackerRuleException]:
+    rows = await session.execute(
+        select(TrackerRuleException)
+        .where(TrackerRuleException.rule_id == rule_id)
+        .order_by(TrackerRuleException.date)
+    )
+    return list(rows.scalars().all())
+
+
+async def _accessible_rule(
+    session: DBSession, user_id: int, rule_id: int
+) -> TrackerRule:
+    """A rule on a tracker on a feed the caller may see, or 404.
+
+    A rule has no feed of its own, so the join is what scopes it: it belongs to
+    a tracker, and the tracker belongs to the feed. Nothing here reads a feed id
+    off the request.
+    """
+    rule = await session.scalar(
+        select(TrackerRule)
+        .join(Tracker, TrackerRule.tracker_id == Tracker.id)
+        .where(
+            Tracker.feed_id.in_(accessible_feed_ids(user_id)),
+            TrackerRule.id == rule_id,
+        )
+    )
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return rule
+
+
 @router.get("/feeds/{feed_id}/rules")
 async def list_rules(feed: AccessibleFeed, session: DBSession) -> list[TrackerRuleOut]:
     """The feed's rules as stored, for editing rather than for the calendar."""
     rules, exceptions, _ = await _feed_rules(session, feed.id)
     return [
-        TrackerRuleOut(
-            id=rule.id,
-            tracker_id=rule.tracker_id,
-            trip_id=rule.trip_id,
-            monday=rule.monday,
-            tuesday=rule.tuesday,
-            wednesday=rule.wednesday,
-            thursday=rule.thursday,
-            friday=rule.friday,
-            saturday=rule.saturday,
-            sunday=rule.sunday,
-            start_date=rule.start_date,
-            end_date=rule.end_date,
-            start_time=rule.start_time,
-            end_time=rule.end_time,
-            exceptions=[
-                RuleExceptionOut(
-                    id=exc.id, date=exc.date, exception_type=exc.exception_type
-                )
-                for exc in exceptions.get(rule.id, [])
-            ],
-        )
+        _rule_out(rule, exceptions.get(rule.id, []))
         for rule in sorted(rules, key=lambda r: (r.tracker_id, r.id))
     ]
+
+
+@router.get("/trackers/{tracker_id}/rules")
+async def list_tracker_rules(
+    tracker_id: str, user_id: CurrentUser, session: DBSession
+) -> list[TrackerRuleOut]:
+    """One tracker's rules, for the tracker page rather than the calendar."""
+    tracker = await _accessible_tracker(session, user_id, tracker_id)
+    rows = await session.execute(
+        select(TrackerRule)
+        .where(TrackerRule.tracker_id == tracker.id)
+        .order_by(TrackerRule.id)
+    )
+    rules = list(rows.scalars().all())
+    return [_rule_out(rule, await _rule_exceptions(session, rule.id)) for rule in rules]
+
+
+@router.post("/trackers/{tracker_id}/rules", status_code=201)
+async def create_rule(
+    payload: TrackerRuleWrite,
+    tracker_id: str,
+    user_id: CurrentUser,
+    session: DBSession,
+) -> TrackerRuleOut:
+    """Assign a tracker to a trip.
+
+    The trip id is not checked against the feed's schedule, for the same reason
+    an informed entity's is not: the zip is parsed in the browser, and a feed
+    can be reloaded out from under a rule that was right when it was written.
+    An assignment naming a trip the loaded schedule has lost is something to
+    draw attention to, not something to refuse to store.
+    """
+    tracker = await _accessible_tracker(session, user_id, tracker_id)
+    rule = TrackerRule(tracker_id=tracker.id, **payload.model_dump())
+    session.add(rule)
+    await session.commit()
+    await session.refresh(rule)
+    return _rule_out(rule, [])
+
+
+@router.get("/rules/{rule_id}")
+async def read_rule(
+    rule_id: int, user_id: CurrentUser, session: DBSession
+) -> TrackerRuleOut:
+    rule = await _accessible_rule(session, user_id, rule_id)
+    return _rule_out(rule, await _rule_exceptions(session, rule.id))
+
+
+@router.patch("/rules/{rule_id}")
+async def update_rule(
+    payload: TrackerRuleWrite, rule_id: int, user_id: CurrentUser, session: DBSession
+) -> TrackerRuleOut:
+    """Replace a rule's whole recurrence.
+
+    Every field is sent, so an omitted weekday is a cleared one and an absent
+    ``end_date`` is an open-ended rule. The exceptions are left alone: they name
+    dates, and editing when a rule runs does not un-say "not on the 4th".
+
+    The tracker does not move. A rule is one tracker on one trip, so reassigning
+    it to a different tracker is a different rule, and a PATCH that could
+    silently move a rule between feeds is exactly the thing the scoping here is
+    meant to make impossible.
+    """
+    rule = await _accessible_rule(session, user_id, rule_id)
+    for field, value in payload.model_dump().items():
+        setattr(rule, field, value)
+    session.add(rule)
+    await session.commit()
+    await session.refresh(rule)
+    return _rule_out(rule, await _rule_exceptions(session, rule.id))
+
+
+@router.delete("/rules/{rule_id}", status_code=204)
+async def delete_rule(
+    rule_id: int, user_id: CurrentUser, session: DBSession
+) -> Response:
+    """Delete a rule and the exceptions hanging off it."""
+    rule = await _accessible_rule(session, user_id, rule_id)
+    await session.execute(
+        delete(TrackerRuleException).where(TrackerRuleException.rule_id == rule.id)
+    )
+    await session.delete(rule)
+    await session.commit()
+    return Response(status_code=204)
+
+
+@router.post("/rules/{rule_id}/exceptions", status_code=201)
+async def create_exception(
+    payload: RuleExceptionWrite,
+    rule_id: int,
+    user_id: CurrentUser,
+    session: DBSession,
+) -> RuleExceptionOut:
+    """Add or replace one date's exception.
+
+    ``(rule_id, date)`` is unique, and a date can only be added or removed, so
+    a second write for the same date is the reader changing their mind rather
+    than a conflict: it replaces the type instead of 409ing at a calendar that
+    would have to delete before it could re-add.
+    """
+    rule = await _accessible_rule(session, user_id, rule_id)
+    existing = await session.scalar(
+        select(TrackerRuleException).where(
+            TrackerRuleException.rule_id == rule.id,
+            TrackerRuleException.date == payload.date,
+        )
+    )
+    exception = existing or TrackerRuleException(rule_id=rule.id, date=payload.date)
+    exception.exception_type = payload.exception_type
+    session.add(exception)
+    await session.commit()
+    await session.refresh(exception)
+    return RuleExceptionOut(
+        id=exception.id, date=exception.date, exception_type=exception.exception_type
+    )
+
+
+@router.delete("/rules/{rule_id}/exceptions/{exception_id}", status_code=204)
+async def delete_exception(
+    rule_id: int, exception_id: int, user_id: CurrentUser, session: DBSession
+) -> Response:
+    """Drop one exception, putting the date back under the weekday flags."""
+    rule = await _accessible_rule(session, user_id, rule_id)
+    exception = await session.scalar(
+        select(TrackerRuleException).where(
+            TrackerRuleException.id == exception_id,
+            TrackerRuleException.rule_id == rule.id,
+        )
+    )
+    if exception is None:
+        raise HTTPException(status_code=404, detail="Exception not found")
+    await session.delete(exception)
+    await session.commit()
+    return Response(status_code=204)
 
 
 @router.get("/feeds/{feed_id}/assignments")

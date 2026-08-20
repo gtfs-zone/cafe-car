@@ -444,6 +444,282 @@ class TestAssignments:
         assert response.json() == []
 
 
+class TestRuleWrites:
+    """The calendar's writes: rules, and the exceptions that bend them.
+
+    A rule has no feed column, so every one of these scopes through the join to
+    its tracker. That is the thing worth a test per endpoint: a rule id is a
+    small integer and guessing one is trivial.
+    """
+
+    @staticmethod
+    def _body(**overrides: object) -> dict:
+        body = {
+            "trip_id": "trip-1",
+            "monday": True,
+            "start_date": "2026-01-01",
+            "start_time": 9 * 3600,
+            "end_time": 17 * 3600,
+        }
+        body.update(overrides)
+        return body
+
+    async def _make_rule(self, session: AsyncSession, world: dict) -> TrackerRule:
+        rule = TrackerRule(
+            tracker_id=world["tracker"].id,
+            trip_id="trip-1",
+            monday=True,
+            start_date=date(2026, 1, 1),
+            start_time=9 * 3600,
+            end_time=17 * 3600,
+        )
+        session.add(rule)
+        await session.commit()
+        await session.refresh(rule)
+        return rule
+
+    async def test_a_stranger_cannot_list_a_trackers_rules(
+        self, client: AsyncClient, world: dict
+    ) -> None:
+        response = await client.get(
+            f"/api/trackers/{world['tracker'].id}/rules", headers=STRANGER
+        )
+
+        assert response.status_code == 404
+
+    async def test_a_stranger_cannot_create_a_rule(
+        self, client: AsyncClient, world: dict
+    ) -> None:
+        response = await client.post(
+            f"/api/trackers/{world['tracker'].id}/rules",
+            json=self._body(),
+            headers=STRANGER | WRITE,
+        )
+
+        assert response.status_code == 404
+
+    async def test_a_stranger_cannot_read_edit_or_delete_a_rule(
+        self, client: AsyncClient, world: dict, session: AsyncSession
+    ) -> None:
+        rule = await self._make_rule(session, world)
+
+        assert (
+            await client.get(f"/api/rules/{rule.id}", headers=STRANGER)
+        ).status_code == 404
+        assert (
+            await client.patch(
+                f"/api/rules/{rule.id}", json=self._body(), headers=STRANGER | WRITE
+            )
+        ).status_code == 404
+        assert (
+            await client.delete(f"/api/rules/{rule.id}", headers=STRANGER | WRITE)
+        ).status_code == 404
+
+    async def test_a_stranger_cannot_touch_the_exceptions(
+        self, client: AsyncClient, world: dict, session: AsyncSession
+    ) -> None:
+        rule = await self._make_rule(session, world)
+
+        response = await client.post(
+            f"/api/rules/{rule.id}/exceptions",
+            json={"date": "2026-08-17", "exception_type": "removed"},
+            headers=STRANGER | WRITE,
+        )
+
+        assert response.status_code == 404
+
+    async def test_a_member_creates_a_rule_and_it_expands(
+        self, client: AsyncClient, world: dict
+    ) -> None:
+        created = await client.post(
+            f"/api/trackers/{world['tracker'].id}/rules",
+            json=self._body(),
+            headers=MEMBER | WRITE,
+        )
+
+        assert created.status_code == 201
+        assert created.json()["tracker_id"] == world["tracker"].id
+        assert created.json()["exceptions"] == []
+
+        expanded = await client.get(
+            f"/api/feeds/{world['feed'].id}/assignments?from=2026-08-17&to=2026-08-23",
+            headers=MEMBER,
+        )
+        assert [a["service_date"] for a in expanded.json()] == ["2026-08-17"]
+
+    async def test_a_rule_with_no_weekday_is_allowed(
+        self, client: AsyncClient, world: dict
+    ) -> None:
+        """A one-off assignment is every flag false plus one added date."""
+        created = await client.post(
+            f"/api/trackers/{world['tracker'].id}/rules",
+            json=self._body(monday=False),
+            headers=OWNER | WRITE,
+        )
+        assert created.status_code == 201
+        rule_id = created.json()["id"]
+
+        added = await client.post(
+            f"/api/rules/{rule_id}/exceptions",
+            json={"date": "2026-08-18", "exception_type": "added"},
+            headers=OWNER | WRITE,
+        )
+        assert added.status_code == 201
+
+        expanded = await client.get(
+            f"/api/feeds/{world['feed'].id}/assignments?from=2026-08-17&to=2026-08-23",
+            headers=OWNER,
+        )
+        assert [a["service_date"] for a in expanded.json()] == ["2026-08-18"]
+
+    async def test_a_backwards_window_is_rejected(
+        self, client: AsyncClient, world: dict
+    ) -> None:
+        response = await client.post(
+            f"/api/trackers/{world['tracker'].id}/rules",
+            json=self._body(start_time=17 * 3600, end_time=9 * 3600),
+            headers=OWNER | WRITE,
+        )
+
+        assert response.status_code == 422
+
+    async def test_a_window_crossing_midnight_is_not(
+        self, client: AsyncClient, world: dict
+    ) -> None:
+        response = await client.post(
+            f"/api/trackers/{world['tracker'].id}/rules",
+            json=self._body(start_time=23 * 3600, end_time=25 * 3600),
+            headers=OWNER | WRITE,
+        )
+
+        assert response.status_code == 201
+        assert response.json()["end_time"] == 90000
+
+    async def test_an_end_date_before_the_start_is_rejected(
+        self, client: AsyncClient, world: dict
+    ) -> None:
+        response = await client.post(
+            f"/api/trackers/{world['tracker'].id}/rules",
+            json=self._body(end_date="2025-12-31"),
+            headers=OWNER | WRITE,
+        )
+
+        assert response.status_code == 422
+
+    async def test_a_patch_replaces_the_recurrence_and_keeps_the_exceptions(
+        self, client: AsyncClient, world: dict, session: AsyncSession
+    ) -> None:
+        rule = await self._make_rule(session, world)
+        await client.post(
+            f"/api/rules/{rule.id}/exceptions",
+            json={"date": "2026-08-17", "exception_type": "removed"},
+            headers=OWNER | WRITE,
+        )
+
+        response = await client.patch(
+            f"/api/rules/{rule.id}",
+            json=self._body(monday=False, tuesday=True, trip_id="trip-2"),
+            headers=OWNER | WRITE,
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["monday"] is False
+        assert body["tuesday"] is True
+        assert body["trip_id"] == "trip-2"
+        assert [e["date"] for e in body["exceptions"]] == ["2026-08-17"]
+
+    async def test_a_patch_cannot_move_a_rule_to_another_tracker(
+        self, client: AsyncClient, world: dict, session: AsyncSession
+    ) -> None:
+        rule = await self._make_rule(session, world)
+        other_tracker = Tracker(
+            device_key="quietly-brave-heron",
+            nickname="Heron",
+            feed_id=world["other"].id,
+        )
+        session.add(other_tracker)
+        await session.commit()
+
+        response = await client.patch(
+            f"/api/rules/{rule.id}",
+            json=self._body() | {"tracker_id": other_tracker.id},
+            headers=OWNER | WRITE,
+        )
+
+        assert response.json()["tracker_id"] == world["tracker"].id
+
+    async def test_writing_the_same_date_twice_replaces_the_exception(
+        self, client: AsyncClient, world: dict, session: AsyncSession
+    ) -> None:
+        rule = await self._make_rule(session, world)
+        first = await client.post(
+            f"/api/rules/{rule.id}/exceptions",
+            json={"date": "2026-08-17", "exception_type": "removed"},
+            headers=OWNER | WRITE,
+        )
+        second = await client.post(
+            f"/api/rules/{rule.id}/exceptions",
+            json={"date": "2026-08-17", "exception_type": "added"},
+            headers=OWNER | WRITE,
+        )
+
+        assert second.status_code == 201
+        assert second.json()["id"] == first.json()["id"]
+        assert second.json()["exception_type"] == "added"
+
+    async def test_deleting_an_exception_puts_the_day_back(
+        self, client: AsyncClient, world: dict, session: AsyncSession
+    ) -> None:
+        rule = await self._make_rule(session, world)
+        created = await client.post(
+            f"/api/rules/{rule.id}/exceptions",
+            json={"date": "2026-08-17", "exception_type": "removed"},
+            headers=OWNER | WRITE,
+        )
+
+        removed = await client.delete(
+            f"/api/rules/{rule.id}/exceptions/{created.json()['id']}",
+            headers=OWNER | WRITE,
+        )
+        assert removed.status_code == 204
+
+        expanded = await client.get(
+            f"/api/feeds/{world['feed'].id}/assignments?from=2026-08-17&to=2026-08-23",
+            headers=OWNER,
+        )
+        assert [a["service_date"] for a in expanded.json()] == ["2026-08-17"]
+
+    async def test_deleting_a_rule_takes_its_exceptions_with_it(
+        self, client: AsyncClient, world: dict, session: AsyncSession
+    ) -> None:
+        rule = await self._make_rule(session, world)
+        await client.post(
+            f"/api/rules/{rule.id}/exceptions",
+            json={"date": "2026-08-17", "exception_type": "removed"},
+            headers=OWNER | WRITE,
+        )
+
+        response = await client.delete(f"/api/rules/{rule.id}", headers=OWNER | WRITE)
+
+        assert response.status_code == 204
+        remaining = await session.execute(
+            select(func.count()).select_from(TrackerRuleException)
+        )
+        assert remaining.scalar() == 0
+
+    async def test_a_write_without_the_csrf_header_is_refused(
+        self, client: AsyncClient, world: dict
+    ) -> None:
+        response = await client.post(
+            f"/api/trackers/{world['tracker'].id}/rules",
+            json=self._body(),
+            headers=OWNER,
+        )
+
+        assert response.status_code == 403
+
+
 class TestAlerts:
     async def test_a_stranger_cannot_list_alerts(
         self, client: AsyncClient, world: dict
