@@ -127,6 +127,10 @@ async def world(session: AsyncSession) -> dict:
     }
 
 
+# Every mutation carries the CSRF header; `require_csrf` is mounted on the
+# whole router, so a POST without it never reaches a route.
+WRITE = {"X-Yard-Master": "1"}
+
 OWNER = _headers("kc-owner", "owner@example.com")
 MEMBER = _headers("kc-member", "member@example.com")
 STRANGER = _headers("kc-stranger", "stranger@example.com")
@@ -577,15 +581,21 @@ class TestCsrf:
     async def test_a_mutation_without_the_header_is_refused(
         self, client: AsyncClient, world: dict
     ) -> None:
-        """Nothing under /api mutates yet, so this drives the dependency
-        directly. The check is mounted on the router, so the route that phase 5
-        adds inherits it whether or not it remembers to ask."""
+        """The check is mounted on the router rather than on the route, so a
+        mutation added later inherits it whether or not it remembers to ask."""
+        response = await client.post(
+            f"/api/feeds/{world['feed'].id}/reload", headers=OWNER
+        )
+
+        assert response.status_code == 403
+
+    async def test_the_dependency_refuses_any_unsafe_method(self) -> None:
         from fastapi import HTTPException
         from starlette.requests import Request
 
         from cafe_car.api.deps import require_csrf
 
-        scope = {"type": "http", "method": "POST", "headers": []}
+        scope = {"type": "http", "method": "DELETE", "headers": []}
         with pytest.raises(HTTPException) as excinfo:
             await require_csrf(Request(scope))
 
@@ -609,6 +619,161 @@ class TestCsrf:
         response = await client.get("/api/me", headers=OWNER)
 
         assert response.status_code == 200
+
+
+@pytest.fixture
+def loads(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Records what was queued instead of talking to a broker that is not up."""
+    queued: list[int] = []
+    monkeypatch.setattr("cafe_car.api.feeds.request_feed_load", queued.append)
+    return queued
+
+
+class TestCreateFeed:
+    async def test_the_creator_owns_it_and_a_load_is_queued(
+        self, client: AsyncClient, world: dict, loads: list[int]
+    ) -> None:
+        response = await client.post(
+            "/api/feeds",
+            headers={**MEMBER, **WRITE},
+            json={
+                "feed_name": "brand-new",
+                "static_feed_url": "https://example.com/gtfs.zip",
+            },
+        )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["feed_name"] == "brand-new"
+        assert body["owner_id"] == world["member"].id
+        assert body["is_owner"] is True
+        assert body["can_manage"] is True
+        # No `gtfs_static_feed` row exists yet, and the client must not read
+        # that as "pending".
+        assert body["load"] is None
+        assert loads == [body["id"]]
+
+    async def test_the_new_feed_is_in_the_creators_own_list(
+        self, client: AsyncClient, world: dict, loads: list[int]
+    ) -> None:
+        await client.post(
+            "/api/feeds",
+            headers={**MEMBER, **WRITE},
+            json={
+                "feed_name": "brand-new",
+                "static_feed_url": "https://example.com/gtfs.zip",
+            },
+        )
+
+        response = await client.get("/api/feeds", headers=MEMBER)
+
+        assert "brand-new" in [f["feed_name"] for f in response.json()]
+
+    async def test_a_taken_name_is_a_conflict_not_a_crash(
+        self, client: AsyncClient, world: dict, loads: list[int]
+    ) -> None:
+        response = await client.post(
+            "/api/feeds",
+            headers={**MEMBER, **WRITE},
+            json={
+                "feed_name": world["feed"].feed_name,
+                "static_feed_url": "https://example.com/gtfs.zip",
+            },
+        )
+
+        assert response.status_code == 409
+        assert loads == []
+
+    @pytest.mark.parametrize(
+        "name", ["Uppercase", "ab", "has space", "1leading-digit", ""]
+    )
+    async def test_a_malformed_name_is_refused(
+        self, client: AsyncClient, world: dict, loads: list[int], name: str
+    ) -> None:
+        response = await client.post(
+            "/api/feeds",
+            headers={**MEMBER, **WRITE},
+            json={
+                "feed_name": name,
+                "static_feed_url": "https://example.com/gtfs.zip",
+            },
+        )
+
+        assert response.status_code == 422
+
+    async def test_a_url_that_is_not_a_url_is_refused(
+        self, client: AsyncClient, world: dict, loads: list[int]
+    ) -> None:
+        response = await client.post(
+            "/api/feeds",
+            headers={**MEMBER, **WRITE},
+            json={"feed_name": "brand-new", "static_feed_url": "not-a-url"},
+        )
+
+        assert response.status_code == 422
+
+    async def test_a_url_is_stored_exactly_as_typed(
+        self, client: AsyncClient, world: dict, loads: list[int]
+    ) -> None:
+        """`AnyHttpUrl` would append a trailing slash to a bare host, which
+        rewrites the URL somebody pasted."""
+        response = await client.post(
+            "/api/feeds",
+            headers={**MEMBER, **WRITE},
+            json={"feed_name": "brand-new", "static_feed_url": "https://example.com"},
+        )
+
+        assert response.json()["static_feed_url"] == "https://example.com"
+
+    async def test_a_stranger_cannot_create_a_feed_they_do_not_own(
+        self, client: AsyncClient, world: dict, loads: list[int]
+    ) -> None:
+        """Ownership is the caller, never the body: an `owner_id` in the
+        payload has to buy nothing."""
+        response = await client.post(
+            "/api/feeds",
+            headers={**MEMBER, **WRITE},
+            json={
+                "feed_name": "brand-new",
+                "static_feed_url": "https://example.com/gtfs.zip",
+                "owner_id": world["stranger"].id,
+            },
+        )
+
+        assert response.json()["owner_id"] == world["member"].id
+
+
+class TestReloadFeed:
+    async def test_the_owner_can_queue_a_reload(
+        self, client: AsyncClient, world: dict, loads: list[int]
+    ) -> None:
+        response = await client.post(
+            f"/api/feeds/{world['feed'].id}/reload", headers={**OWNER, **WRITE}
+        )
+
+        assert response.status_code == 202
+        assert loads == [world["feed"].id]
+
+    async def test_a_member_can_too(
+        self, client: AsyncClient, world: dict, loads: list[int]
+    ) -> None:
+        """Re-downloading the schedule a member already works against is not an
+        owner-only act, matching the admin reload button this replaces."""
+        response = await client.post(
+            f"/api/feeds/{world['feed'].id}/reload", headers={**MEMBER, **WRITE}
+        )
+
+        assert response.status_code == 202
+
+    async def test_a_stranger_cannot(
+        self, client: AsyncClient, world: dict, loads: list[int]
+    ) -> None:
+        response = await client.post(
+            f"/api/feeds/{world['feed'].id}/reload", headers={**STRANGER, **WRITE}
+        )
+
+        assert response.status_code == 404
+        assert loads == []
 
 
 async def test_the_old_admin_still_answers(client: AsyncClient, world: dict) -> None:

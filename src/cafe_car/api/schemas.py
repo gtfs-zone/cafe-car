@@ -15,9 +15,18 @@ route decides what it loads.
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 
-from pydantic import BaseModel
+from pydantic import AnyHttpUrl, BaseModel, TypeAdapter, field_validator
+
+_url_validator = TypeAdapter(AnyHttpUrl)
+
+# The same shape ``Feed.feed_name`` enforces. Restated rather than imported:
+# SQLModel skips validators on ``table=True`` models, so the model's own
+# validator never runs on a write and this is the only thing standing between a
+# request body and the column.
+_FEED_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{2,63}$")
 
 
 class MeOut(BaseModel):
@@ -65,6 +74,35 @@ class FeedOut(BaseModel):
     service_alerts_url: str
     # None when the feed has never been handed to schedule-foamer.
     load: LoadStatusOut | None
+
+
+class FeedCreate(BaseModel):
+    """A new feed. The owner is the caller and is never taken from the body."""
+
+    feed_name: str
+    static_feed_url: str
+
+    @field_validator("feed_name")
+    @classmethod
+    def check_name(cls, v: str) -> str:
+        if not _FEED_NAME_RE.match(v):
+            raise ValueError(
+                "feed_name must start with a lowercase letter and contain only "
+                "lowercase letters, digits, underscores and hyphens (3-64 chars)"
+            )
+        return v
+
+    @field_validator("static_feed_url")
+    @classmethod
+    def check_url(cls, v: str) -> str:
+        try:
+            _url_validator.validate_python(v)
+        except Exception:
+            raise ValueError("Must be a valid http or https URL") from None
+        # Returned as typed, not as pydantic re-serializes it: `AnyHttpUrl`
+        # appends a trailing slash to a bare host, which would silently rewrite
+        # the URL somebody pasted.
+        return v
 
 
 class TrackerOut(BaseModel):

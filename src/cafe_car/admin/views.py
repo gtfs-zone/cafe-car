@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextlib
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, ClassVar
@@ -23,6 +22,7 @@ if TYPE_CHECKING:
 
 from cafe_car.admin.access import accessible_feed_ids, owned_feed_ids
 from cafe_car.admin.context import current_user_id_var, current_user_is_admin_var
+from cafe_car.feed_load import request_feed_load
 
 _STATUS_BADGE = {
     "pending": '<span class="badge bg-yellow">pending</span>',
@@ -261,10 +261,7 @@ class FeedAdmin(ScopedModelView, model=Feed):
     async def after_model_change(
         self, data: dict, model: Feed, is_created: bool, request: Request
     ) -> None:
-        with contextlib.suppress(Exception):
-            from cafe_car.celery_client import celery_app
-
-            celery_app.send_task("schedule_foamer.tasks.load_feed", args=[model.id])
+        request_feed_load(model.id)
 
 
 class TrackerAdmin(ScopedModelView, model=Tracker):

@@ -7,15 +7,21 @@ in, and it is refused to everyone else.
 
 ``GET /feeds/{id}`` is the opposite case and goes through ``accessible_feed``,
 so an admin following a link to someone else's feed still lands on it.
+
+The two writes here are deliberately not symmetrical about access. Creating is
+open to anyone signed in and the caller becomes the owner. Reloading only asks
+for ``accessible_feed``, matching the old admin's reload button: re-downloading
+the schedule a member is already working against is not an owner-only act.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from railroad_club.models.feed import Feed
 from railroad_club.models.gtfs_static import GtfsStaticFeed
 from railroad_club.models.user import User
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from cafe_car.admin.access import accessible_feed_ids, personal_feed_ids
 from cafe_car.api.deps import (
@@ -24,7 +30,8 @@ from cafe_car.api.deps import (
     DBSession,
     is_admin,
 )
-from cafe_car.api.schemas import FeedOut, LoadStatusOut, MeOut
+from cafe_car.api.schemas import FeedCreate, FeedOut, LoadStatusOut, MeOut
+from cafe_car.feed_load import request_feed_load
 from cafe_car.feed_urls import feed_rt_urls
 from cafe_car.settings import get_settings
 
@@ -122,3 +129,53 @@ async def read_feed(
         else None
     )
     return _feed_out(feed, user_id=user_id, owner=owner, static=static)
+
+
+@router.post("/feeds", status_code=201)
+async def create_feed(
+    payload: FeedCreate, user_id: CurrentUser, session: DBSession
+) -> FeedOut:
+    """Create a feed owned by the caller and queue its first load.
+
+    ``feed_name`` is globally unique and appears in every public GTFS-RT URL,
+    so a collision is a 409 the form can show against the field rather than the
+    500 an IntegrityError would produce. Checked before the insert *and* caught
+    after it: the pre-check is for the message, the catch is for the race.
+    """
+    feed = Feed(
+        feed_name=payload.feed_name,
+        static_feed_url=payload.static_feed_url,
+        owner_id=user_id,
+    )
+    taken = await session.scalar(
+        select(Feed.id).where(Feed.feed_name == payload.feed_name)
+    )
+    if taken is not None:
+        raise HTTPException(status_code=409, detail="That feed name is taken")
+
+    session.add(feed)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="That feed name is taken") from None
+    await session.refresh(feed)
+
+    # There is no `gtfs_static_feed` row yet, so `load` is null until
+    # schedule-foamer picks the task up. Every status reader has to handle that.
+    request_feed_load(feed.id)
+
+    owner = await session.get(User, user_id)
+    return _feed_out(feed, user_id=user_id, owner=owner, static=None)
+
+
+@router.post("/feeds/{feed_id}/reload", status_code=202)
+async def reload_feed(feed: AccessibleFeed) -> Response:
+    """Queue a re-download of the feed's static zip.
+
+    202 with no body: the answer is "asked for", not "done". The client learns
+    what happened from the feed's load status, which phase 7 pushes down the
+    event stream.
+    """
+    request_feed_load(feed.id)
+    return Response(status_code=202)

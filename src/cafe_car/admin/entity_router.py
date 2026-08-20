@@ -15,6 +15,7 @@ from cafe_car.accounts import choose_absorber, link_candidates, merge_users
 from cafe_car.admin.access import accessible_feed_ids, owned_feed_ids
 from cafe_car.admin.auth import resolve_request_user_id
 from cafe_car.admin.context import current_user_id_var, current_user_is_admin_var
+from cafe_car.feed_load import request_feed_load
 from cafe_car.sharing import (
     list_members,
     list_open_invites,
@@ -216,12 +217,7 @@ async def reload_feed(request: Request, feed_id: int) -> RedirectResponse:
     )
     if result.scalar_one_or_none() is None:
         return HTMLResponse("Not found or access denied", status_code=403)
-    try:
-        from cafe_car.celery_client import celery_app
-
-        celery_app.send_task("schedule_foamer.tasks.load_feed", args=[feed_id])
-    except Exception:
-        pass  # worker unavailable
+    request_feed_load(feed_id)
     return RedirectResponse(url="/feed/list", status_code=303)
 
 
