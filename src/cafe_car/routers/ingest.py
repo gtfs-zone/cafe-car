@@ -21,6 +21,13 @@ from railroad_club.models.service_alert import ServiceAlert
 from railroad_club.models.tracker import Tracker
 from sqlmodel import delete, select
 
+# Runtime imports, not type-checking ones: pydantic resolves these annotations
+# when it builds `AlertIngest`, so a TYPE_CHECKING block would break the model.
+from cafe_car.alert_enums import (  # noqa: TC001
+    AlertCause,
+    AlertEffect,
+    AlertSeverity,
+)
 from cafe_car.database import get_session
 from cafe_car.settings import get_settings
 
@@ -28,35 +35,6 @@ if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession
 
 router = APIRouter()
-
-AlertCause = Literal[
-    "UNKNOWN_CAUSE",
-    "OTHER_CAUSE",
-    "TECHNICAL_PROBLEM",
-    "STRIKE",
-    "DEMONSTRATION",
-    "ACCIDENT",
-    "HOLIDAY",
-    "WEATHER",
-    "MAINTENANCE",
-    "CONSTRUCTION",
-    "POLICE_ACTIVITY",
-    "MEDICAL_EMERGENCY",
-]
-AlertEffect = Literal[
-    "NO_SERVICE",
-    "REDUCED_SERVICE",
-    "SIGNIFICANT_DELAYS",
-    "DETOUR",
-    "ADDITIONAL_SERVICE",
-    "MODIFIED_SERVICE",
-    "OTHER_EFFECT",
-    "UNKNOWN_EFFECT",
-    "STOP_MOVED",
-    "NO_EFFECT",
-    "ACCESSIBILITY_ISSUE",
-]
-AlertSeverity = Literal["UNKNOWN_SEVERITY", "INFO", "WARNING", "SEVERE"]
 
 # GTFS-RT VehicleStopStatus, by name. Every one of them names a stop: the
 # vehicle is approaching, sitting at, or heading to *that* stop, so a status is

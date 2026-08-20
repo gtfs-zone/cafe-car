@@ -121,6 +121,21 @@ class TraccarClient:
             resp.raise_for_status()
             return resp.json()
 
+    async def delete_device(self, unique_id: str) -> bool:
+        """Delete the device with this uniqueId. True if one was there.
+
+        Traccar has no delete-by-uniqueId, so the id is looked up first. A
+        device that is already gone is not a failure: the caller is retiring a
+        credential, and "no device holds it" is the state they asked for.
+        """
+        device = await self.get_device(unique_id)
+        if device is None:
+            return False
+        async with self._client() as client:
+            resp = await client.delete(f"/api/devices/{device['id']}")
+            resp.raise_for_status()
+        return True
+
     async def ensure_device(self, name: str, unique_id: str) -> dict:
         """Idempotently ensure a device exists for uniqueId; return it."""
         existing = await self.get_device(unique_id)
@@ -184,3 +199,38 @@ def qr_svg(data: str, *, scale: int = 4) -> str:
     buf = io.BytesIO()
     segno.make(data, error="m").save(buf, kind="svg", scale=scale, border=2)
     return buf.getvalue().decode("utf-8")
+
+
+async def provision_device(nickname: str, device_key: str) -> None:
+    """Create the Traccar device a new tracker will report through.
+
+    Best-effort: the tracker row is already committed, and Traccar being down
+    must not turn a successful create into a 500. A device that never appeared
+    can be made later by re-provisioning, and the credential is unchanged.
+    """
+    try:
+        await get_traccar_client().ensure_device(name=nickname, unique_id=device_key)
+    except Exception:
+        # No device_key in the message: this lands in logs.
+        logger.warning(
+            "could not provision the Traccar device for tracker %r",
+            nickname,
+            exc_info=True,
+        )
+
+
+async def retire_device(device_key: str) -> None:
+    """Delete the Traccar device a deleted tracker was provisioning.
+
+    Best-effort, exactly like the create side: the row is already gone, and a
+    Traccar that is down must not turn a successful delete into a 500. What is
+    left behind is a device whose ``uniqueId`` no longer maps to a tracker, so
+    a fix posted with it is dropped rather than published.
+    """
+    try:
+        await get_traccar_client().delete_device(device_key)
+    except Exception:
+        # No device_key in the message: this lands in logs.
+        logger.warning(
+            "could not retire the Traccar device for a tracker", exc_info=True
+        )

@@ -2,19 +2,31 @@
 
 Alerts and entities have no owner of their own: an alert belongs to a feed and
 an entity belongs to an alert, so both scope through ``accessible_feed_ids``
-rather than growing a second definition of who may read them.
+rather than growing a second definition of who may read or write them. A member
+may publish an alert on a feed they were given, which is the point of being
+given it.
+
+An entity is created and deleted, never patched. It is six nullable columns
+naming one thing, so editing one is the same act as replacing it, and a PATCH
+would only add a second way to arrive at a selector that names nothing.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from cafe_car.admin.access import accessible_feed_ids
 from cafe_car.api.deps import AccessibleFeed, CurrentUser, DBSession
-from cafe_car.api.schemas import AlertDetailOut, AlertOut, InformedEntityOut
+from cafe_car.api.schemas import (
+    AlertDetailOut,
+    AlertOut,
+    AlertWrite,
+    InformedEntityOut,
+    InformedEntityWrite,
+)
 
 router = APIRouter()
 
@@ -111,3 +123,103 @@ async def list_entities(
 ) -> list[InformedEntityOut]:
     await _accessible_alert(session, user_id, alert_id)
     return await _load_entities(session, alert_id)
+
+
+@router.post("/feeds/{feed_id}/alerts", status_code=201)
+async def create_alert(
+    payload: AlertWrite, feed: AccessibleFeed, session: DBSession
+) -> AlertDetailOut:
+    """Publish a new alert on this feed.
+
+    It starts with no informed entities, which in GTFS-RT means it applies to
+    the whole feed. That is a real thing to publish, so the entities are added
+    afterwards rather than being required here.
+    """
+    alert = ServiceAlert(feed_id=feed.id, **payload.model_dump())
+    session.add(alert)
+    await session.commit()
+    await session.refresh(alert)
+    return AlertDetailOut(**_alert_fields(alert, 0), entities=[])
+
+
+@router.patch("/alerts/{alert_id}")
+async def update_alert(
+    payload: AlertWrite, alert_id: int, user_id: CurrentUser, session: DBSession
+) -> AlertDetailOut:
+    """Replace the editable half of an alert.
+
+    Every editable field is sent, so an omitted one is a cleared one: the form
+    is a whole alert, and "the URL is now blank" has to be expressible.
+    """
+    alert = await _accessible_alert(session, user_id, alert_id)
+    for field, value in payload.model_dump().items():
+        setattr(alert, field, value)
+    session.add(alert)
+    await session.commit()
+    await session.refresh(alert)
+
+    entities = await _load_entities(session, alert_id)
+    return AlertDetailOut(**_alert_fields(alert, len(entities)), entities=entities)
+
+
+@router.delete("/alerts/{alert_id}", status_code=204)
+async def delete_alert(
+    alert_id: int, user_id: CurrentUser, session: DBSession
+) -> Response:
+    """Delete an alert and its informed entities.
+
+    The entities point at it and do not cascade in the model, so they are
+    removed here rather than left to raise a foreign-key error.
+    """
+    alert = await _accessible_alert(session, user_id, alert_id)
+    await session.execute(
+        delete(InformedEntity).where(InformedEntity.service_alert_id == alert.id)
+    )
+    await session.delete(alert)
+    await session.commit()
+    return Response(status_code=204)
+
+
+@router.post("/alerts/{alert_id}/entities", status_code=201)
+async def create_entity(
+    payload: InformedEntityWrite,
+    alert_id: int,
+    user_id: CurrentUser,
+    session: DBSession,
+) -> InformedEntityOut:
+    """Add one entity selector to an alert.
+
+    Nothing here is checked against the feed's schedule: the zip is parsed in
+    the browser, an id can be published before the schedule carrying it is
+    loaded, and a selector for a route that does not exist yet is a warning for
+    the form to draw rather than a reason to refuse the write.
+    """
+    await _accessible_alert(session, user_id, alert_id)
+    entity = InformedEntity(service_alert_id=alert_id, **payload.model_dump())
+    session.add(entity)
+    await session.commit()
+    await session.refresh(entity)
+    return _entity_out(entity)
+
+
+@router.delete("/alerts/{alert_id}/entities/{entity_id}", status_code=204)
+async def delete_entity(
+    alert_id: int, entity_id: int, user_id: CurrentUser, session: DBSession
+) -> Response:
+    """Remove one entity selector.
+
+    Scoped through the alert *and* matched on it, so an entity id belonging to
+    somebody else's alert is a 404 rather than a delete.
+    """
+    await _accessible_alert(session, user_id, alert_id)
+    entity = await session.scalar(
+        select(InformedEntity).where(
+            InformedEntity.id == entity_id,
+            InformedEntity.service_alert_id == alert_id,
+        )
+    )
+    if entity is None:
+        raise HTTPException(status_code=404, detail="Informed entity not found")
+    await session.delete(entity)
+    await session.commit()
+    return Response(status_code=204)

@@ -16,9 +16,23 @@ route decides what it loads.
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
-from pydantic import AnyHttpUrl, BaseModel, TypeAdapter, field_validator
+from pydantic import (
+    AnyHttpUrl,
+    BaseModel,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
+
+# Runtime imports: pydantic resolves these annotations when it builds the
+# alert models, so a TYPE_CHECKING block would break them.
+from cafe_car.alert_enums import (
+    AlertCause,
+    AlertEffect,
+    AlertSeverity,
+)
 
 _url_validator = TypeAdapter(AnyHttpUrl)
 
@@ -237,3 +251,248 @@ class AssignmentOut(BaseModel):
     service_date: date
     start_time: int
     end_time: int
+
+
+# ─── What a write is allowed to say ──────────────────────────────────────────
+# Request bodies are as narrow as the response ones, and for the same reason:
+# a field that is not here cannot be set by a crafted POST. Ownership, ids and
+# `device_key` are all absent from every model below, so none of them is
+# settable from a body.
+
+
+class FeedUpdate(BaseModel):
+    """An edit to a feed. Absent means unchanged, which is what PATCH means.
+
+    ``owner_id`` is not here. Ownership moves through ``/transfer`` alone,
+    which checks that the recipient is already a member.
+    """
+
+    feed_name: str | None = None
+    static_feed_url: str | None = None
+
+    _check_name = field_validator("feed_name")(FeedCreate.check_name.__func__)  # type: ignore[attr-defined]
+    _check_url = field_validator("static_feed_url")(FeedCreate.check_url.__func__)  # type: ignore[attr-defined]
+
+
+class FeedTransfer(BaseModel):
+    """Hand a feed to one of its members, who must already be one."""
+
+    new_owner_id: int
+
+
+class TrackerCreate(BaseModel):
+    """A new tracker.
+
+    ``device_key`` is optional and settable **at creation only**, matching the
+    admin this replaces: it is baked into the provisioned Traccar device, so
+    changing it afterwards would leave the device answering for a credential
+    the row no longer holds. Left out, the model generates a pet-name one.
+    """
+
+    nickname: str
+    device_key: str | None = None
+
+    @field_validator("nickname")
+    @classmethod
+    def check_nickname(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("A tracker needs a nickname")
+        if len(v) > 64:
+            raise ValueError("A nickname is at most 64 characters")
+        return v
+
+    @field_validator("device_key")
+    @classmethod
+    def check_device_key(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if len(v) > 64:
+            raise ValueError("A device key is at most 64 characters")
+        return v
+
+
+class TrackerBulkCreate(BaseModel):
+    """Several trackers at once, named ``{prefix}{n}``.
+
+    The prefix is used exactly as typed, separator included, so ``bus-`` gives
+    ``bus-1``. Numbering continues past whatever the feed already has under
+    that prefix rather than colliding with it: ``(feed_id, nickname)`` is
+    unique, and a bulk create is the easiest way to trip over that.
+    """
+
+    prefix: str
+    count: int
+
+    @field_validator("prefix")
+    @classmethod
+    def check_prefix(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("A prefix is needed to name the trackers")
+        if len(v) > 48:
+            raise ValueError("A prefix is at most 48 characters")
+        return v
+
+
+class TrackerUpdate(BaseModel):
+    """A rename, and nothing else.
+
+    ``id`` is the Redis key and the ``tracker_rule`` foreign key; ``device_key``
+    is baked into the Traccar device. Both are immutable after creation, so
+    neither appears here.
+    """
+
+    nickname: str
+
+    _check_nickname = field_validator("nickname")(TrackerCreate.check_nickname.__func__)  # type: ignore[attr-defined]
+
+
+class ProvisioningOut(BaseModel):
+    """What a phone needs to start reporting as this tracker.
+
+    Every field is derived from ``device_key`` and is therefore just as secret:
+    the config URL contains it in a query parameter and the QR encodes that URL.
+    Served by the provisioning route alone, and shown in the properties panel
+    alone.
+    """
+
+    device_key: str
+    config_url: str
+    qr_svg: str
+
+
+class AlertWrite(BaseModel):
+    """The editable half of a service alert.
+
+    ``cause``, ``effect`` and ``severity_level`` are the GTFS-RT enumerations
+    by name, shared with the ingest API so both writers agree on what a feed may
+    publish. The active period is two instants; a naive datetime is read as UTC,
+    because that is what the columns store and what the old admin coerced to.
+    """
+
+    header_text: str
+    description_text: str
+    url: str | None = None
+    cause: AlertCause | None = None
+    effect: AlertEffect | None = None
+    severity_level: AlertSeverity | None = None
+    active_period_start: datetime | None = None
+    active_period_end: datetime | None = None
+
+    @field_validator("header_text", "description_text")
+    @classmethod
+    def check_text(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("This field cannot be empty")
+        return v
+
+    @field_validator("url")
+    @classmethod
+    def check_url(cls, v: str | None) -> str | None:
+        if not v:
+            return None
+        try:
+            _url_validator.validate_python(v)
+        except Exception:
+            raise ValueError("Must be a valid http or https URL") from None
+        return v
+
+    @field_validator("active_period_start", "active_period_end")
+    @classmethod
+    def as_utc(cls, v: datetime | None) -> datetime | None:
+        # A `datetime-local` input has no zone. Stamping UTC here is what the
+        # admin did, and it is the only reading that does not depend on which
+        # machine the browser is on.
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=UTC)
+        return v
+
+    @model_validator(mode="after")
+    def check_window(self) -> AlertWrite:
+        start, end = self.active_period_start, self.active_period_end
+        if start is not None and end is not None and end < start:
+            raise ValueError("The alert ends before it starts")
+        return self
+
+
+class InformedEntityWrite(BaseModel):
+    """One entity selector on an alert.
+
+    The check constraint the column carries is restated as a validator so a
+    selector that names nothing is a 422 against the form rather than an
+    IntegrityError. ``direction_id`` without a ``route_id`` is the second half
+    of that rule and means nothing on its own.
+    """
+
+    agency_id: str | None = None
+    route_id: str | None = None
+    route_type: int | None = None
+    direction_id: int | None = None
+    stop_id: str | None = None
+    trip_id: str | None = None
+    trip_route_id: str | None = None
+    trip_direction_id: int | None = None
+    trip_start_time: str | None = None
+    trip_start_date: str | None = None
+
+    @field_validator("*")
+    @classmethod
+    def blank_is_absent(cls, v: object) -> object:
+        # Every field is optional and the form posts empty strings for the ones
+        # nobody filled in; an empty selector must be absent, not "".
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
+
+    @model_validator(mode="after")
+    def check_specifier(self) -> InformedEntityWrite:
+        if not any(
+            v is not None
+            for v in (
+                self.agency_id,
+                self.route_id,
+                self.route_type,
+                self.direction_id,
+                self.stop_id,
+                self.trip_id,
+            )
+        ):
+            raise ValueError(
+                "An informed entity needs at least one of agency_id, route_id, "
+                "route_type, direction_id, stop_id or trip_id"
+            )
+        if self.direction_id is not None and not self.route_id:
+            raise ValueError("direction_id needs a route_id to mean anything")
+        return self
+
+
+class MemberAdd(BaseModel):
+    """An address to share a feed with, which may not have an account yet."""
+
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def check_email(cls, v: str) -> str:
+        v = v.strip().lower()
+        if "@" not in v or v.startswith("@") or v.endswith("@"):
+            raise ValueError("That is not an email address")
+        return v
+
+
+class ShareOut(BaseModel):
+    """What sharing an address did.
+
+    ``kind`` is ``member`` when the address already had a verified account and
+    ``invited`` when it did not; the frontend shows ``message`` either way,
+    because the difference is exactly what a person needs told.
+    """
+
+    kind: str
+    message: str
