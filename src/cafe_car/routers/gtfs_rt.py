@@ -107,7 +107,7 @@ async def _build_trip_updates_feed(
             )
             if start_date:
                 entity.trip_update.trip.start_date = start_date
-            # Public per-vehicle id, never the secret tracker id.
+            # Public per-vehicle id, never the tracker's device_key.
             entity.trip_update.vehicle.id = _public_vehicle_id(
                 tracker.nickname, trip_data.get("vehicle_id"), trip_id, start_date
             )
@@ -203,18 +203,18 @@ async def _build_vehicle_positions_feed(
             trip_id = data.get("trip_id")
             start_date = data.get("start_date")
             entity = msg.entity.add()
-            # entity.id must be unique within the message, stable across polls, and
-            # free of the secret tracker id, and per GTFS-RT, so must the actual
-            # VehicleDescriptor.id below, so both share this derivation. One tracker
-            # credential can carry many concurrent vehicles (Amtrak's fleet under
-            # one id), so the tracker nickname is only a fallback for single-device
-            # producers, folded with the trip instance when there are several.
+            # entity.id must be unique within the message and stable across polls,
+            # and per GTFS-RT so must the actual VehicleDescriptor.id below, so both
+            # share this derivation. One tracker can carry many concurrent vehicles
+            # (Amtrak's fleet under one credential), so the tracker nickname is only
+            # a fallback for single-device producers, folded with the trip instance
+            # when there are several.
             public_id = data.get("vehicle_id")
             vehicle_id = _public_vehicle_id(
                 tracker.nickname, public_id, trip_id, start_date
             )
             entity.id = vehicle_id
-            # Public label only (the tracker id is the secret credential).
+            # Public label only (the device_key is the secret credential).
             entity.vehicle.vehicle.id = vehicle_id
             entity.vehicle.vehicle.label = (
                 data.get("vehicle_label") or public_id or tracker.nickname

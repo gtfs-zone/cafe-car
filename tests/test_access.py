@@ -8,7 +8,7 @@ prove the inheritance is real rather than assumed.
 
 from __future__ import annotations
 
-from datetime import time
+from datetime import date
 from typing import TYPE_CHECKING
 
 import pytest
@@ -41,7 +41,9 @@ async def world(session: AsyncSession) -> dict:
     feed = await make_feed(session, owner, "shared-feed")
     await add_member(session, feed, member, added_by=owner)
 
-    tracker = Tracker(id="lively-happy-otter", nickname="Otter", feed_id=feed.id)
+    tracker = Tracker(
+        device_key="lively-happy-otter", nickname="Otter", feed_id=feed.id
+    )
     alert = ServiceAlert(
         feed_id=feed.id, header_text="Delays", description_text="Signal problem"
     )
@@ -52,8 +54,9 @@ async def world(session: AsyncSession) -> dict:
         tracker_id=tracker.id,
         trip_id="trip-1",
         monday=True,
-        start_time=time(9, 0),
-        end_time=time(17, 0),
+        start_date=date(2026, 1, 1),
+        start_time=9 * 3600,
+        end_time=17 * 3600,
     )
     entity = InformedEntity(service_alert_id=alert.id, route_id="route-1")
     session.add_all([rule, entity])

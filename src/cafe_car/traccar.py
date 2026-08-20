@@ -1,7 +1,8 @@
 """Thin Traccar REST client + provisioning helpers.
 
 Used by the admin app to auto-create a Traccar device per Tracker
-(`uniqueId = tracker id`) and to build the Traccar Client provisioning URL/QR.
+(`uniqueId = Tracker.device_key`) and to build the Traccar Client
+provisioning URL/QR.
 """
 
 from __future__ import annotations
@@ -162,18 +163,19 @@ def get_traccar_client() -> TraccarClient:
 TRACCAR_CLIENT_SCHEME = "org.traccar.client://config"
 
 
-def build_config_url(tracker_id: str, settings: Settings | None = None) -> str:
+def build_config_url(device_key: str, settings: Settings | None = None) -> str:
     """Build the Traccar Client provisioning URL for a tracker.
 
-    Shape: ``org.traccar.client://config?url={server}&id={tracker_id}&{profile}``,
+    Shape: ``org.traccar.client://config?url={server}&id={device_key}&{profile}``,
     where ``server`` is the phone-reachable Traccar endpoint the client posts to.
-    The ``id`` is the tracker's secret credential (never exposed in a feed).
+    The ``id`` is ``Tracker.device_key``, the secret credential (never exposed in
+    a feed), not the tracker's surrogate primary key.
     """
     settings = settings or get_settings()
     server = settings.traccar_client_base.rstrip("/")
     return (
         f"{TRACCAR_CLIENT_SCHEME}?url={server}"
-        f"&id={quote(tracker_id, safe='')}&{settings.traccar_default_profile}"
+        f"&id={quote(device_key, safe='')}&{settings.traccar_default_profile}"
     )
 
 

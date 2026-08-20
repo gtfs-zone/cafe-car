@@ -8,8 +8,9 @@ no exceptions.
 Two properties beyond access control are asserted here because nothing else
 can:
 
-* ``Tracker.id`` is the Traccar provisioning credential, so it must be absent
-  from every list response and present only on a detail one.
+* ``Tracker.device_key`` is the Traccar provisioning credential, so it must be
+  absent from every list response and present only on a detail one. ``Tracker.id``
+  is a surrogate and belongs in both.
 * The admin bypass rests on the *token*, never on the proxy header or the
   session, so a forged ``groups`` claim in a token whose ``sub`` disagrees with
   the header must buy nothing.
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import date
 from typing import TYPE_CHECKING
 
 import pytest
@@ -27,6 +29,7 @@ from railroad_club.models.gtfs_static import GtfsStaticFeed, LoadStatus
 from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
 from railroad_club.models.tracker import Tracker
+from railroad_club.models.tracker_rule import TrackerRule, TrackerRuleException
 
 from tests.factories import PROVIDER, add_member, make_feed, make_user
 
@@ -99,7 +102,9 @@ async def world(session: AsyncSession) -> dict:
 
     other = await make_feed(session, stranger, "stranger-feed")
 
-    tracker = Tracker(id="lively-happy-otter", nickname="Otter", feed_id=feed.id)
+    tracker = Tracker(
+        device_key="lively-happy-otter", nickname="Otter", feed_id=feed.id
+    )
     alert = ServiceAlert(
         feed_id=feed.id, header_text="Delays", description_text="Signal problem"
     )
@@ -164,6 +169,7 @@ class TestFeedList:
         assert feed["load"]["status"] == "success"
         assert feed["load"]["timezone"] == "America/New_York"
         assert feed["is_owner"] is True
+        assert feed["can_manage"] is True
 
     async def test_a_member_is_not_an_owner(
         self, client: AsyncClient, world: dict
@@ -172,6 +178,7 @@ class TestFeedList:
 
         (feed,) = response.json()
         assert feed["is_owner"] is False
+        assert feed["can_manage"] is False
 
 
 class TestFeedDetail:
@@ -199,20 +206,11 @@ class TestTrackers:
 
         assert response.status_code == 404
 
-    async def test_a_stranger_cannot_read_a_tracker_by_credential(
+    async def test_a_stranger_cannot_read_a_tracker(
         self, client: AsyncClient, world: dict
     ) -> None:
         response = await client.get(
             f"/api/trackers/{world['tracker'].id}", headers=STRANGER
-        )
-
-        assert response.status_code == 404
-
-    async def test_a_stranger_cannot_read_a_tracker_by_nickname(
-        self, client: AsyncClient, world: dict
-    ) -> None:
-        response = await client.get(
-            f"/api/feeds/{world['feed'].id}/trackers/Otter", headers=STRANGER
         )
 
         assert response.status_code == 404
@@ -225,26 +223,37 @@ class TestTrackers:
         )
 
         assert response.status_code == 200
-        assert response.json() == [{"nickname": "Otter", "feed_id": world["feed"].id}]
-        assert world["tracker"].id not in response.text
+        assert response.json() == [
+            {
+                "id": world["tracker"].id,
+                "nickname": "Otter",
+                "feed_id": world["feed"].id,
+            }
+        ]
+        assert "lively-happy-otter" not in response.text
 
     async def test_the_detail_page_is_where_the_credential_lives(
         self, client: AsyncClient, world: dict
     ) -> None:
-        by_nickname = await client.get(
-            f"/api/feeds/{world['feed'].id}/trackers/Otter", headers=MEMBER
+        response = await client.get(
+            f"/api/trackers/{world['tracker'].id}", headers=MEMBER
         )
-        by_id = await client.get(f"/api/trackers/{world['tracker'].id}", headers=MEMBER)
 
-        assert by_nickname.json()["id"] == world["tracker"].id
-        assert by_id.json() == by_nickname.json()
+        assert response.json() == {
+            "id": world["tracker"].id,
+            "nickname": "Otter",
+            "feed_id": world["feed"].id,
+            "device_key": "lively-happy-otter",
+        }
 
     async def test_a_feed_never_returns_another_feeds_trackers(
         self, client: AsyncClient, world: dict, session: AsyncSession
     ) -> None:
         session.add(
             Tracker(
-                id="quietly-brave-heron", nickname="Heron", feed_id=world["other"].id
+                device_key="quietly-brave-heron",
+                nickname="Heron",
+                feed_id=world["other"].id,
             )
         )
         await session.commit()
@@ -254,6 +263,178 @@ class TestTrackers:
         )
 
         assert [t["nickname"] for t in response.json()] == ["Otter"]
+
+
+class TestAssignments:
+    """Expansion is over service dates, and it is scoped like everything else."""
+
+    async def test_a_stranger_cannot_list_assignments(
+        self, client: AsyncClient, world: dict
+    ) -> None:
+        response = await client.get(
+            f"/api/feeds/{world['feed'].id}/assignments?from=2026-08-17&to=2026-08-23",
+            headers=STRANGER,
+        )
+
+        assert response.status_code == 404
+
+    async def test_a_weekly_rule_expands_once_per_matching_day(
+        self, client: AsyncClient, world: dict, session: AsyncSession
+    ) -> None:
+        session.add(
+            TrackerRule(
+                tracker_id=world["tracker"].id,
+                trip_id="trip-1",
+                monday=True,
+                wednesday=True,
+                start_date=date(2026, 1, 1),
+                start_time=9 * 3600,
+                end_time=17 * 3600,
+            )
+        )
+        await session.commit()
+
+        response = await client.get(
+            f"/api/feeds/{world['feed'].id}/assignments?from=2026-08-17&to=2026-08-23",
+            headers=OWNER,
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        # 2026-08-17 is a Monday, 2026-08-19 the Wednesday after it.
+        assert [a["service_date"] for a in body] == ["2026-08-17", "2026-08-19"]
+        assert body[0]["tracker_nickname"] == "Otter"
+        assert body[0]["trip_id"] == "trip-1"
+
+    async def test_an_exception_removes_one_day_and_adds_another(
+        self, client: AsyncClient, world: dict, session: AsyncSession
+    ) -> None:
+        rule = TrackerRule(
+            tracker_id=world["tracker"].id,
+            trip_id="trip-1",
+            monday=True,
+            start_date=date(2026, 1, 1),
+            start_time=9 * 3600,
+            end_time=17 * 3600,
+        )
+        session.add(rule)
+        await session.flush()
+        session.add_all(
+            [
+                TrackerRuleException(
+                    rule_id=rule.id, date=date(2026, 8, 17), exception_type="removed"
+                ),
+                TrackerRuleException(
+                    rule_id=rule.id, date=date(2026, 8, 21), exception_type="added"
+                ),
+            ]
+        )
+        await session.commit()
+
+        response = await client.get(
+            f"/api/feeds/{world['feed'].id}/assignments?from=2026-08-17&to=2026-08-23",
+            headers=OWNER,
+        )
+
+        assert [a["service_date"] for a in response.json()] == ["2026-08-21"]
+
+    async def test_a_midnight_crossing_rule_lands_on_the_day_it_started(
+        self, client: AsyncClient, world: dict, session: AsyncSession
+    ) -> None:
+        """One entry, on the start day, with an end_time past 86400 rather than
+        a second entry on the following morning."""
+        session.add(
+            TrackerRule(
+                tracker_id=world["tracker"].id,
+                trip_id="owl-1",
+                monday=True,
+                start_date=date(2026, 1, 1),
+                start_time=23 * 3600,
+                end_time=25 * 3600,
+            )
+        )
+        await session.commit()
+
+        response = await client.get(
+            f"/api/feeds/{world['feed'].id}/assignments?from=2026-08-17&to=2026-08-18",
+            headers=OWNER,
+        )
+
+        (assignment,) = response.json()
+        assert assignment["service_date"] == "2026-08-17"
+        assert assignment["end_time"] == 90000
+
+    async def test_a_rule_outside_its_date_range_does_not_expand(
+        self, client: AsyncClient, world: dict, session: AsyncSession
+    ) -> None:
+        session.add(
+            TrackerRule(
+                tracker_id=world["tracker"].id,
+                trip_id="trip-1",
+                monday=True,
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 6, 30),
+                start_time=9 * 3600,
+                end_time=17 * 3600,
+            )
+        )
+        await session.commit()
+
+        response = await client.get(
+            f"/api/feeds/{world['feed'].id}/assignments?from=2026-08-17&to=2026-08-23",
+            headers=OWNER,
+        )
+
+        assert response.json() == []
+
+    async def test_a_backwards_range_is_rejected(
+        self, client: AsyncClient, world: dict
+    ) -> None:
+        response = await client.get(
+            f"/api/feeds/{world['feed'].id}/assignments?from=2026-08-23&to=2026-08-17",
+            headers=OWNER,
+        )
+
+        assert response.status_code == 400
+
+    async def test_an_unbounded_range_is_rejected(
+        self, client: AsyncClient, world: dict
+    ) -> None:
+        response = await client.get(
+            f"/api/feeds/{world['feed'].id}/assignments?from=2020-01-01&to=2030-01-01",
+            headers=OWNER,
+        )
+
+        assert response.status_code == 400
+
+    async def test_another_feeds_rules_never_appear(
+        self, client: AsyncClient, world: dict, session: AsyncSession
+    ) -> None:
+        other_tracker = Tracker(
+            device_key="quietly-brave-heron",
+            nickname="Heron",
+            feed_id=world["other"].id,
+        )
+        session.add(other_tracker)
+        await session.flush()
+        session.add(
+            TrackerRule(
+                tracker_id=other_tracker.id,
+                trip_id="not-yours",
+                monday=True,
+                start_date=date(2026, 1, 1),
+                start_time=9 * 3600,
+                end_time=17 * 3600,
+            )
+        )
+        await session.commit()
+
+        response = await client.get(
+            f"/api/feeds/{world['feed'].id}/assignments?from=2026-08-17&to=2026-08-23",
+            headers=OWNER,
+        )
+
+        assert response.json() == []
 
 
 class TestAlerts:

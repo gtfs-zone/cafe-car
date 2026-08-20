@@ -14,7 +14,7 @@ through the same filter the serializer uses (``cafe_car.alerts``).
 
 Deliberately public and unauthenticated, unlike ``internal.py::feed_urls``: it
 carries only what an unauthenticated ``.pb`` request would already reveal. The
-tracker credential (``Tracker.id``) must never appear in the response.
+tracker credential (``Tracker.device_key``) must never appear in the response.
 """
 
 from __future__ import annotations

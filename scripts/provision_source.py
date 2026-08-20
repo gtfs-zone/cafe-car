@@ -2,13 +2,15 @@
 """Provision a feed source (Feed + Tracker) in the cafe-car database.
 
 Creates the row chain a producer needs to surface in a GTFS-RT feed: a `Feed`
-(owned by an existing `User`) and a `Tracker` whose secret `id` doubles as the
-Traccar `uniqueId` / Redis key. After the DB upsert it creates the matching
-Traccar device via REST, then prints the tracker `id` to paste into the
-producer's env (e.g. hell-gate-bridge `INGEST_VEHICLE_ID`).
+(owned by an existing `User`) and a `Tracker`. The tracker has two identities:
+`id`, a surrogate that is the Redis key and is not secret, and `device_key`, the
+Traccar `uniqueId`, which is. After the DB upsert it creates the matching Traccar
+device via REST from the `device_key`, then prints the surrogate `id` to paste
+into the producer's env (e.g. hell-gate-bridge `INGEST_VEHICLE_ID`).
 
 Because `gtfs_rt.py` scans `vehicle:{tracker.id}:*`, the producer MUST publish
-under `tracker_id == <tracker.id>` for its positions to appear in the feed.
+under `tracker_id == <tracker.id>` (the surrogate) for its positions to appear in
+the feed.
 
 The script is idempotent: re-running with the same `--feed-name`/`--nickname`
 reuses the existing rows and Traccar device rather than duplicating them.
@@ -25,6 +27,10 @@ explicit trip_id, e.g. hell-gate-bridge, but used by real Traccar devices):
 
     ... --rule mon-fri=08:00-17:00=AMTK123 --rule sat,sun=10:00-14:00=AMTK199
 
+Rule times are service-relative, so an hour past 24 is how a window that runs
+into the next calendar day is written: `--rule fri=23:00-25:30=OWL1`. Rules start
+today and are open-ended unless `--rule-start` / `--rule-end` say otherwise.
+
 The owner defaults to `alice@local`, looked up by `User.primary_email`; that
 `User` row only exists after she has logged into the admin at least once
 (users are created lazily on first authenticated request, one per identity
@@ -36,7 +42,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-from datetime import time
+from datetime import date
 from typing import TYPE_CHECKING
 
 import httpx
@@ -103,21 +109,23 @@ def _parse_days(spec: str) -> set[int]:
     return days
 
 
-def _parse_time(text: str) -> time:
+def _parse_time(text: str) -> int:
+    """Parse ``HH:MM`` to seconds since service midnight; hours may exceed 24."""
     try:
         hh, mm = text.split(":", 1)
-        return time(hour=int(hh), minute=int(mm))
+        hours, minutes = int(hh), int(mm)
     except (ValueError, TypeError) as exc:
         raise ProvisionError(f"Bad time {text!r}; expected HH:MM") from exc
+    if hours < 0 or not 0 <= minutes < 60:
+        raise ProvisionError(f"Bad time {text!r}; expected HH:MM")
+    return hours * 3600 + minutes * 60
 
 
-def _parse_rule(raw: str) -> tuple[set[int], time, time, str]:
+def _parse_rule(raw: str) -> tuple[set[int], int, int, str]:
     """Parse ``DAYS=HH:MM-HH:MM=TRIP_ID`` into (days, start, end, trip_id)."""
     parts = raw.split("=")
     if len(parts) != 3:
-        raise ProvisionError(
-            f"Bad --rule {raw!r}; expected DAYS=HH:MM-HH:MM=TRIP_ID"
-        )
+        raise ProvisionError(f"Bad --rule {raw!r}; expected DAYS=HH:MM-HH:MM=TRIP_ID")
     days_spec, window, trip_id = parts
     if "-" not in window:
         raise ProvisionError(f"Bad time window {window!r}; expected HH:MM-HH:MM")
@@ -131,7 +139,12 @@ def _parse_rule(raw: str) -> tuple[set[int], time, time, str]:
     return days, start, end, trip_id.strip()
 
 
-def _build_rules(tracker_id: str, raw_rules: list[str]) -> list[TrackerRule]:
+def _build_rules(
+    tracker_id: str,
+    raw_rules: list[str],
+    start_date: date,
+    end_date: date | None,
+) -> list[TrackerRule]:
     rules: list[TrackerRule] = []
     for raw in raw_rules:
         days, start, end, trip_id = _parse_rule(raw)
@@ -140,6 +153,8 @@ def _build_rules(tracker_id: str, raw_rules: list[str]) -> list[TrackerRule]:
             TrackerRule(
                 tracker_id=tracker_id,
                 trip_id=trip_id,
+                start_date=start_date,
+                end_date=end_date,
                 start_time=start,
                 end_time=end,
                 **weekday_flags,
@@ -152,8 +167,10 @@ async def _find_owner(
     session: AsyncSession, provider: str, email: str, subject: str | None
 ) -> User:
     if subject is not None:
-        stmt = select(User).join(Identity, Identity.user_id == User.id).where(
-            Identity.provider == provider, Identity.provider_subject == subject
+        stmt = (
+            select(User)
+            .join(Identity, Identity.user_id == User.id)
+            .where(Identity.provider == provider, Identity.provider_subject == subject)
         )
         who = f"identity provider={provider!r} subject={subject!r}"
     else:
@@ -202,11 +219,13 @@ async def _upsert_feed(
 
 
 async def _upsert_tracker(
-    session: AsyncSession, *, feed_id: int, nickname: str, tracker_id: str | None,
+    session: AsyncSession, *, feed_id: int, nickname: str, device_key: str | None
 ) -> Tracker:
     tracker: Tracker | None = None
-    if tracker_id is not None:
-        tracker = await session.get(Tracker, tracker_id)
+    if device_key is not None:
+        tracker = await session.scalar(
+            select(Tracker).where(Tracker.device_key == device_key)
+        )
     if tracker is None:
         tracker = await session.scalar(
             select(Tracker).where(
@@ -215,11 +234,12 @@ async def _upsert_tracker(
         )
     if tracker is None:
         kwargs = {"nickname": nickname, "feed_id": feed_id}
-        if tracker_id is not None:
-            kwargs["id"] = tracker_id
+        if device_key is not None:
+            kwargs["device_key"] = device_key
         tracker = Tracker(**kwargs)
         session.add(tracker)
-        await session.flush()  # trigger default_factory id when not supplied
+        # Trigger the id / device_key default factories when not supplied.
+        await session.flush()
         log.info("Created tracker id=%s nickname=%r", tracker.id, nickname)
     else:
         log.info("Reusing tracker id=%s nickname=%r", tracker.id, tracker.nickname)
@@ -227,13 +247,15 @@ async def _upsert_tracker(
 
 
 async def _replace_rules(
-    session: AsyncSession, tracker_id: str, raw_rules: list[str]
+    session: AsyncSession,
+    tracker_id: str,
+    raw_rules: list[str],
+    start_date: date,
+    end_date: date | None,
 ) -> int:
     """Replace all rules for the tracker with the provided set (idempotent)."""
-    await session.exec(
-        delete(TrackerRule).where(TrackerRule.tracker_id == tracker_id)
-    )
-    rules = _build_rules(tracker_id, raw_rules)
+    await session.exec(delete(TrackerRule).where(TrackerRule.tracker_id == tracker_id))
+    rules = _build_rules(tracker_id, raw_rules, start_date, end_date)
     for rule in rules:
         session.add(rule)
     log.info("Set %d rule(s) for tracker %s", len(rules), tracker_id)
@@ -258,19 +280,26 @@ async def provision(args: argparse.Namespace) -> int:
             session,
             feed_id=feed.id,
             nickname=args.nickname,
-            tracker_id=args.tracker_id,
+            device_key=args.device_key,
         )
         if args.rule:
-            await _replace_rules(session, tracker.id, args.rule)
+            await _replace_rules(
+                session,
+                tracker.id,
+                args.rule,
+                args.rule_start or date.today(),
+                args.rule_end,
+            )
         await session.commit()
         # Capture before the session closes / attributes expire.
         tracker_id, tracker_nick = tracker.id, tracker.nickname
+        device_key = tracker.device_key
         feed_name = feed.feed_name
 
     if not args.skip_traccar:
         try:
             device = await get_traccar_client().ensure_device(
-                name=tracker_nick, unique_id=tracker_id
+                name=tracker_nick, unique_id=device_key
             )
             log.info(
                 "Traccar device ready: id=%s uniqueId=%s",
@@ -286,6 +315,8 @@ async def provision(args: argparse.Namespace) -> int:
     print(f"# Provisioned feed {feed_name!r} / tracker {tracker_nick!r}")
     print(f"# gtfs_rt scans vehicle:{tracker_id}:*")
     print(f"INGEST_VEHICLE_ID={tracker_id}")
+    print("# Traccar uniqueId (secret, for a real device only):")
+    print(f"# {device_key}")
     return 0
 
 
@@ -303,8 +334,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--nickname", required=True, help="Public tracker label")
     parser.add_argument(
-        "--tracker-id",
-        help="Fixed tracker id (secret). Defaults to an auto-generated pet name.",
+        "--device-key",
+        help="Fixed Traccar uniqueId (secret). Defaults to a generated pet name.",
+    )
+    parser.add_argument(
+        "--rule-start",
+        type=date.fromisoformat,
+        help="First service date rules apply to, YYYY-MM-DD (default: today)",
+    )
+    parser.add_argument(
+        "--rule-end",
+        type=date.fromisoformat,
+        help="Last service date rules apply to, YYYY-MM-DD (default: open-ended)",
     )
     parser.add_argument(
         "--owner-email",

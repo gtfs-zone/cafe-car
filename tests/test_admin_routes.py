@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
-from datetime import time
+from datetime import date
 from typing import TYPE_CHECKING
 
 import pytest
@@ -244,7 +244,9 @@ async def test_the_feed_hub_renders_everything_beneath_the_feed(
     """
     owner = await make_user(session, email="hub@example.com", subject="kc-hub")
     feed = await make_feed(session, owner, "hub-feed")
-    tracker = Tracker(id="gently-tender-oyster", nickname="Busbird", feed_id=feed.id)
+    tracker = Tracker(
+        device_key="gently-tender-oyster", nickname="Busbird", feed_id=feed.id
+    )
     session.add(tracker)
     await session.flush()
     session.add(
@@ -252,8 +254,9 @@ async def test_the_feed_hub_renders_everything_beneath_the_feed(
             tracker_id=tracker.id,
             trip_id="trip-42",
             monday=True,
-            start_time=time(6, 0),
-            end_time=time(22, 0),
+            start_date=date(2026, 1, 1),
+            start_time=6 * 3600,
+            end_time=22 * 3600,
         )
     )
     session.add(
@@ -271,7 +274,7 @@ async def test_the_feed_hub_renders_everything_beneath_the_feed(
 
     assert response.status_code == 200
     assert "Busbird" in response.text
-    assert "/tracker/edit/gently-tender-oyster" in response.text
+    assert f"/tracker/edit/{tracker.id}" in response.text
     assert "Bridge is out" in response.text
     assert "/service-alert/edit/" in response.text
     # The People panel is htmx-loaded, so the hub only has to carry the trigger.
@@ -282,13 +285,14 @@ async def test_the_feed_hub_renders_everything_beneath_the_feed(
 async def test_the_feed_hub_does_not_leak_the_tracker_credential(
     client: AsyncClient, session: AsyncSession
 ) -> None:
-    """`Tracker.id` is the Traccar credential. It belongs on the tracker's own
-    page, not on the page you open to talk about who a feed is shared with."""
+    """`Tracker.device_key` is the Traccar credential. It belongs on the tracker's
+    own page, not on the page you open to talk about who a feed is shared with."""
     owner = await make_user(session, email="secret@example.com", subject="kc-secret")
     feed = await make_feed(session, owner, "secret-feed")
-    session.add(
-        Tracker(id="wildly-mellow-heron", nickname="Riverliner", feed_id=feed.id)
+    tracker = Tracker(
+        device_key="wildly-mellow-heron", nickname="Riverliner", feed_id=feed.id
     )
+    session.add(tracker)
     await session.commit()
 
     response = await client.get(
@@ -297,9 +301,10 @@ async def test_the_feed_hub_does_not_leak_the_tracker_credential(
 
     assert response.status_code == 200
     assert "Riverliner" in response.text
-    # The href necessarily contains the id; no other occurrence should.
-    assert response.text.count("wildly-mellow-heron") == 1
-    assert 'href="/tracker/edit/wildly-mellow-heron"' in response.text
+    # The credential is not on this page at all now that the href carries the
+    # surrogate instead.
+    assert "wildly-mellow-heron" not in response.text
+    assert f'href="/tracker/edit/{tracker.id}"' in response.text
 
 
 async def test_the_tracker_page_shows_the_credential_and_its_rules(
@@ -307,7 +312,9 @@ async def test_the_tracker_page_shows_the_credential_and_its_rules(
 ) -> None:
     owner = await make_user(session, email="trk@example.com", subject="kc-trk")
     feed = await make_feed(session, owner, "tracker-feed")
-    tracker = Tracker(id="quietly-brave-otter", nickname="Nightowl", feed_id=feed.id)
+    tracker = Tracker(
+        device_key="quietly-brave-otter", nickname="Nightowl", feed_id=feed.id
+    )
     session.add(tracker)
     await session.flush()
     session.add(
@@ -315,8 +322,10 @@ async def test_the_tracker_page_shows_the_credential_and_its_rules(
             tracker_id=tracker.id,
             trip_id="owl-1",
             sunday=True,
-            start_time=time(23, 0),
-            end_time=time(3, 0),
+            start_date=date(2026, 1, 1),
+            # Past midnight: 23:00 to 03:00 the next calendar day.
+            start_time=23 * 3600,
+            end_time=27 * 3600,
         )
     )
     await session.commit()
@@ -381,7 +390,9 @@ async def test_relation_cells_link_to_edit_not_details(
     admin:details unconditionally, which now 403s."""
     owner = await make_user(session, email="rel@example.com", subject="kc-rel")
     feed = await make_feed(session, owner, "relation-feed")
-    session.add(Tracker(id="boldly-sleepy-crane", nickname="Crane", feed_id=feed.id))
+    session.add(
+        Tracker(device_key="boldly-sleepy-crane", nickname="Crane", feed_id=feed.id)
+    )
     await session.commit()
 
     response = await client.get(
@@ -411,7 +422,7 @@ async def test_a_hostile_nickname_is_escaped_in_the_list(
     feed = await make_feed(session, owner, "xss-feed")
     session.add(
         Tracker(
-            id="sharply-clever-vole",
+            device_key="sharply-clever-vole",
             nickname="<script>alert(1)</script>",
             feed_id=feed.id,
         )

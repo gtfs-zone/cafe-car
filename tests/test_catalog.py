@@ -201,10 +201,11 @@ async def test_an_expired_or_entityless_alert_is_not_reported(
     assert by_name["live-alert-feed"]["has_alerts"] is True
 
 
-async def test_the_catalog_does_not_leak_the_tracker_credential(
+async def test_the_catalog_does_not_leak_tracker_identity(
     make_client: ClientFactory, session: AsyncSession
 ) -> None:
-    """``Tracker.id`` is the Traccar credential. The catalog is world-readable."""
+    """The catalog is world-readable, so neither the tracker's id nor its
+    nickname belongs in it, whatever else is true about the id."""
     owner = await make_user(session)
     feed = await make_feed(session, owner, "secret-feed")
     session.add(

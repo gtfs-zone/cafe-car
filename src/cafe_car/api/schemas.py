@@ -1,11 +1,11 @@
 """What the API is allowed to say.
 
 Every response is built from a model here, field by field, and never by dumping
-an ORM object. That is what keeps ``Tracker.id`` — the Traccar provisioning
-credential — out of a response that has no business carrying it, and it is why
-:class:`TrackerOut` and :class:`TrackerDetailOut` are two types rather than one
-with an optional field: a list endpoint that returns the wrong one fails to
-typecheck rather than leaking.
+an ORM object. That is what keeps ``Tracker.device_key`` - the Traccar
+provisioning credential - out of a response that has no business carrying it,
+and it is why :class:`TrackerOut` and :class:`TrackerDetailOut` are two types
+rather than one with an optional field: a list endpoint that returns the wrong
+one fails to typecheck rather than leaking.
 
 It also sidesteps the trap that outlived SQLAdmin's ``form_excluded_columns``:
 a serializer that walked relationships on a detached instance would raise
@@ -15,7 +15,7 @@ route decides what it loads.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel
 
@@ -53,10 +53,13 @@ class FeedOut(BaseModel):
     static_feed_url: str
     owner_id: int
     owner_name: str | None
-    # Whether *this* caller owns it, which is what gates the owner-only actions
-    # in the UI. An admin sees True on every feed, matching what `owned_feed`
-    # will actually let them do.
+    # Whether this caller *is* the owner. A fact about the row, so an admin
+    # looking at someone else's feed sees False.
     is_owner: bool
+    # Whether this caller may do the owner-only things: transfer, delete,
+    # manage members. True for the owner and for an admin, matching exactly
+    # what `owned_feed` will let them do.
+    can_manage: bool
     vehicle_positions_url: str
     trip_updates_url: str
     service_alerts_url: str
@@ -67,10 +70,13 @@ class FeedOut(BaseModel):
 class TrackerOut(BaseModel):
     """A tracker as everything except its own detail page sees it.
 
-    No ``id``. Trackers are addressed by ``nickname`` within a feed everywhere
-    a client can be overheard: navigation state, the map layer, a log line.
+    ``id`` is a surrogate key and carries no secret, so it is the address a
+    client keeps in navigation state, in the map layer and in a log line.
+    ``nickname`` is the public GTFS-RT label, unique within a feed but a display
+    name rather than an identity.
     """
 
+    id: str
     nickname: str
     feed_id: int
 
@@ -79,11 +85,12 @@ class TrackerDetailOut(TrackerOut):
     """A tracker plus its provisioning credential.
 
     Returned only by the tracker detail endpoint, which a client reaches
-    deliberately when someone opens the properties panel. ``id`` is the Traccar
-    ``uniqueId``; there is no password behind it, so it is the whole secret.
+    deliberately when someone opens the properties panel. ``device_key`` is the
+    Traccar ``uniqueId``; there is no password behind it, so it is the whole
+    secret.
     """
 
-    id: str
+    device_key: str
 
 
 class InformedEntityOut(BaseModel):
@@ -143,3 +150,52 @@ class InviteOut(BaseModel):
 class PeopleOut(BaseModel):
     members: list[MemberOut]
     invites: list[InviteOut]
+
+
+class RuleExceptionOut(BaseModel):
+    """One service date added to or removed from a rule."""
+
+    id: int
+    date: date
+    exception_type: str
+
+
+class TrackerRuleOut(BaseModel):
+    """A recurrence rule, as stored.
+
+    ``start_time``/``end_time`` are seconds since service midnight, so an
+    ``end_time`` past 86400 is a window that runs into the next calendar day.
+    """
+
+    id: int
+    tracker_id: str
+    trip_id: str
+    monday: bool
+    tuesday: bool
+    wednesday: bool
+    thursday: bool
+    friday: bool
+    saturday: bool
+    sunday: bool
+    start_date: date
+    end_date: date | None
+    start_time: int
+    end_time: int
+    exceptions: list[RuleExceptionOut]
+
+
+class AssignmentOut(BaseModel):
+    """One rule occurring on one service date.
+
+    ``service_date`` is the date the window *starts* in feed-local time, and it
+    is the trip's GTFS-RT ``start_date``. A window crossing midnight appears
+    once, on the day it started, with an ``end_time`` past 86400.
+    """
+
+    rule_id: int
+    tracker_id: str
+    tracker_nickname: str
+    trip_id: str
+    service_date: date
+    start_time: int
+    end_time: int

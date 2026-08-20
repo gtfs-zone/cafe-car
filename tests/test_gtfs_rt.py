@@ -109,7 +109,9 @@ async def test_two_concurrent_vehicles_under_one_tracker_get_distinct_ids(
     VehicleDescriptor.id across them."""
     owner = await make_user(session)
     feed = await make_feed(session, owner, "cc-feed")
-    session.add(Tracker(id="ccbus", nickname="CC Bus", feed_id=feed.id))
+    session.add(
+        Tracker(id="ccbus", device_key="ccbus-key", nickname="CC Bus", feed_id=feed.id)
+    )
     await session.commit()
 
     client = await make_client(
@@ -142,13 +144,17 @@ async def test_a_producer_supplied_vehicle_id_is_still_honored(
 ) -> None:
     owner = await make_user(session)
     feed = await make_feed(session, owner, "amtrak-feed")
-    session.add(Tracker(id="amtrak-cred", nickname="Amtrak", feed_id=feed.id))
+    session.add(
+        Tracker(
+            id="amtrak", device_key="amtrak-key", nickname="Amtrak", feed_id=feed.id
+        )
+    )
     await session.commit()
 
     client = await make_client(
         FakeRedis(
             {
-                "vehicle:amtrak-cred:trip-1:20260803": vehicle_record(
+                "vehicle:amtrak:trip-1:20260803": vehicle_record(
                     "trip-1", "20260803", vehicle_id="53:20260803"
                 ),
             }
@@ -166,7 +172,11 @@ async def test_trip_update_vehicle_id_is_also_deduplicated(
 ) -> None:
     owner = await make_user(session)
     feed = await make_feed(session, owner, "tu-cc-feed")
-    session.add(Tracker(id="ccbus2", nickname="CC Bus", feed_id=feed.id))
+    session.add(
+        Tracker(
+            id="ccbus2", device_key="ccbus2-key", nickname="CC Bus", feed_id=feed.id
+        )
+    )
     await session.commit()
 
     client = await make_client(

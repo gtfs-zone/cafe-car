@@ -72,8 +72,9 @@ TRIP_UPDATE_TTL = 300
 
 
 class PositionIngest(BaseModel):
-    # The secret tracker credential (Tracker.id). Selects the
-    # `vehicle:{tracker_id}:*` namespace cafe-car scans; never emitted in a feed.
+    # The tracker's surrogate id (`Tracker.id`), not its `device_key`. Selects
+    # the `vehicle:{tracker_id}:*` namespace cafe-car scans. Not a credential:
+    # `/ingest/*` is authenticated by the shared token in `_check_auth`.
     tracker_id: str
     # Public per-vehicle identity. One tracker credential can fan out to many
     # concurrent vehicles (e.g. Amtrak's ~53 trains under one credential), so the
@@ -179,8 +180,8 @@ class AlertIngest(BaseModel):
 
 
 class AlertsSyncIngest(BaseModel):
-    # Same secret tracker credential as position/trip-update ingest; resolved
-    # to a feed_id server-side so the producer never needs to know it.
+    # Same surrogate tracker id as position/trip-update ingest; resolved to a
+    # feed_id server-side so the producer never needs to know it.
     tracker_id: str
     alerts: list[AlertIngest]
 

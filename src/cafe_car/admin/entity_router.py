@@ -190,13 +190,15 @@ async def tracker_provisioning_partial(
     tracker = await _load_accessible_tracker(session, user_id, tracker_id)
     if tracker is None:
         return HTMLResponse("<p>Not found or access denied.</p>", status_code=403)
-    config_url = build_config_url(tracker.id)
+    # The credential, not the surrogate: this is what the phone posts as its
+    # Traccar uniqueId.
+    config_url = build_config_url(tracker.device_key)
     return templates.TemplateResponse(
         request,
         "sqladmin/_tracker_provisioning.html",
         {
             "nickname": tracker.nickname,
-            "tracker_id": tracker.id,
+            "device_key": tracker.device_key,
             "config_url": config_url,
             "qr_svg": qr_svg(config_url),
         },

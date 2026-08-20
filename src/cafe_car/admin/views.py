@@ -9,7 +9,7 @@ from markupsafe import Markup, escape
 from railroad_club.models.feed import Feed
 from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
-from railroad_club.models.tracker import Tracker, generate_tracker_id
+from railroad_club.models.tracker import Tracker, generate_device_key
 from railroad_club.models.tracker_rule import TrackerRule
 from sqladmin import ModelView
 from sqlalchemy import Select, func, select
@@ -269,27 +269,25 @@ class FeedAdmin(ScopedModelView, model=Feed):
 
 class TrackerAdmin(ScopedModelView, model=Tracker):
     edit_template = "sqladmin/tracker_edit.html"
-    # The secret id and the QR both live on the tracker's own page, which the
+    # The device key and the QR both live on the tracker's own page, which the
     # nickname links to; a "provisioning" column here would just duplicate it.
     column_list: ClassVar[list] = [Tracker.nickname, "feed"]
     column_formatters: ClassVar[dict] = {
         Tracker.nickname: lambda m, a: _link(f"/tracker/edit/{m.id}", m.nickname),
     }
     column_searchable_list: ClassVar[list] = [Tracker.nickname]
-    # ``id`` is a secret pet-name, prefilled with a random default and editable
-    # at creation time only; it is never editable after creation (it's baked
-    # into the Traccar device, tracker_rule FK, and Redis keys).
-    form_include_pk: ClassVar[bool] = True
-    form_excluded_columns: ClassVar[list] = ["feed", "rules"]
-    form_create_rules: ClassVar[list] = ["id", "nickname", "feed_id"]
+    # ``device_key`` is the secret pet-name credential, prefilled with a random
+    # default and editable at creation time only; it is never editable after
+    # creation (it's baked into the Traccar device). ``id`` is a surrogate the
+    # database generates and nobody types.
+    form_excluded_columns: ClassVar[list] = ["feed", "rules", "id"]
+    form_create_rules: ClassVar[list] = ["device_key", "nickname", "feed_id"]
     form_edit_rules: ClassVar[list] = ["nickname", "feed_id"]
     name = "Tracker"
     name_plural = "Trackers"
 
     async def scaffold_form(self, rules: list | None = None) -> type:
         Form = await super().scaffold_form(rules)
-        if rules is not None and "id" not in rules and hasattr(Form, "id"):
-            delattr(Form, "id")
         user_id = current_user_id_var.get()
         async with self.session_maker() as session:
             result = await session.execute(
@@ -338,8 +336,10 @@ class TrackerAdmin(ScopedModelView, model=Tracker):
         )
         if result.scalar_one_or_none() is None:
             raise PermissionError("Feed not found or access denied")
-        tracker_id = (data.get("id") or "").strip()
-        data["id"] = tracker_id or generate_tracker_id()
+        # The surrogate is the model's own default; a posted one is ignored.
+        data.pop("id", None)
+        device_key = (data.get("device_key") or "").strip()
+        data["device_key"] = device_key or generate_device_key()
         return await super().insert_model(request, data)
 
     async def _get_owned_tracker(self, request: Request, pk: str | int) -> Tracker:
@@ -357,9 +357,11 @@ class TrackerAdmin(ScopedModelView, model=Tracker):
         self, request: Request, pk: str | int, data: dict
     ) -> Tracker:
         await self._get_owned_tracker(request, pk)
-        # ``id`` is immutable after creation; never let a crafted POST change it
-        # (it's the Traccar uniqueId / Redis key / tracker_rule FK target).
+        # Both identities are immutable after creation; never let a crafted POST
+        # change them. ``id`` is the Redis key and the tracker_rule FK target,
+        # ``device_key`` is baked into the provisioned Traccar device.
         data.pop("id", None)
+        data.pop("device_key", None)
         return await super().update_model(request, pk, data)
 
     async def delete_model(self, request: Request, pk: str | int) -> None:
@@ -370,13 +372,13 @@ class TrackerAdmin(ScopedModelView, model=Tracker):
         self, data: dict, model: Tracker, is_created: bool, request: Request
     ) -> None:
         if is_created:
-            # Auto-create the matching Traccar device (uniqueId = tracker id).
+            # Auto-create the matching Traccar device (uniqueId = device_key).
             # Best-effort: never block tracker creation on Traccar availability.
             try:
                 from cafe_car.traccar import get_traccar_client
 
                 await get_traccar_client().ensure_device(
-                    name=model.nickname, unique_id=model.id
+                    name=model.nickname, unique_id=model.device_key
                 )
             except Exception:
                 logging.getLogger(__name__).warning(
@@ -656,6 +658,14 @@ class InformedEntityAdmin(ScopedModelView, model=InformedEntity):
 
 
 class TrackerRuleAdmin(ScopedModelView, model=TrackerRule):
+    """Tracker rules, with times as raw seconds since service midnight.
+
+    Seconds rather than a clock widget because the window may run past midnight:
+    23:00-01:00 is 82800-90000, and no time picker can express the second half
+    of that. yard-master's calendar is where this gets a real editor; this panel
+    only has to stay usable until the cutover.
+    """
+
     column_list: ClassVar[list] = [
         "tracker",
         TrackerRule.trip_id,
@@ -666,6 +676,8 @@ class TrackerRuleAdmin(ScopedModelView, model=TrackerRule):
         TrackerRule.friday,
         TrackerRule.saturday,
         TrackerRule.sunday,
+        TrackerRule.start_date,
+        TrackerRule.end_date,
         TrackerRule.start_time,
         TrackerRule.end_time,
     ]
