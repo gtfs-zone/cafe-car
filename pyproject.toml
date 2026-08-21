@@ -33,6 +33,10 @@ dev = [
     "aiosqlite>=0.22.1",
 ]
 
+[project.scripts]
+# Dev fixture, guarded by DEBUG. See src/cafe_car/seed_dev.py.
+cafe-car-seed-dev = "cafe_car.seed_dev:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

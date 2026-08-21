@@ -97,6 +97,22 @@ class KeycloakClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def subject_for_username(self, username: str) -> str | None:
+        """The realm account's subject, or None when the realm has no such user.
+
+        Exact-match, so a username that is a prefix of another cannot return the
+        wrong account. Same read-only ``view-users`` role as the rest of this
+        client.
+        """
+        resp = await self._get(
+            f"/admin/realms/{self._realm}/users?username={username}&exact=true&max=2"
+        )
+        resp.raise_for_status()
+        users = resp.json()
+        if not users:
+            return None
+        return str(users[0]["id"])
+
     async def user_exists(self, subject: str) -> bool:
         """Whether the realm still has this account.
 
