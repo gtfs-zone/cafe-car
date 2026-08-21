@@ -26,6 +26,7 @@ AlertCause = Literal[
     "CONSTRUCTION",
     "POLICE_ACTIVITY",
     "MEDICAL_EMERGENCY",
+    "SPECIAL_EVENT",
 ]
 AlertEffect = Literal[
     "NO_SERVICE",

@@ -45,6 +45,7 @@ _CAUSE_CHOICES = [
     ("CONSTRUCTION", "Construction"),
     ("POLICE_ACTIVITY", "Police Activity"),
     ("MEDICAL_EMERGENCY", "Medical Emergency"),
+    ("SPECIAL_EVENT", "Special Event"),
 ]
 
 _EFFECT_CHOICES = [
