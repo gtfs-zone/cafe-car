@@ -34,7 +34,7 @@ from sqlmodel import select
 
 from cafe_car.alerts import active_alerts
 from cafe_car.database import get_session
-from cafe_car.feed_urls import feed_rt_urls
+from cafe_car.feed_urls import feed_rt_urls, feed_static_url
 from cafe_car.vehicle_payload import live_vehicle_keys
 
 if TYPE_CHECKING:
@@ -124,7 +124,7 @@ async def list_feeds(
         entries.append(
             FeedCatalogEntry(
                 feed_name=feed.feed_name,
-                static_url=feed.static_feed_url or "",
+                static_url=feed_static_url(feed) or "",
                 vehicle_positions_url=rt.vehicle_positions,
                 trip_updates_url=rt.trip_updates,
                 service_alerts_url=rt.service_alerts,

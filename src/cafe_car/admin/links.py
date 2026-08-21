@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from urllib.parse import quote, urlencode
 
-from cafe_car.feed_urls import feed_rt_urls
+from cafe_car.feed_urls import feed_rt_urls, feed_static_url
 
 if TYPE_CHECKING:
     from railroad_club.models.feed import Feed
@@ -31,7 +31,7 @@ def viz_url(feed: Feed) -> str:
     realtime sources. Routes both through the CORS proxy (``cors=s,r``)."""
     rt = feed_rt_urls(feed)
     params = {
-        "static": feed.static_feed_url or "",
+        "static": feed_static_url(feed) or "",
         "rt_vp": rt.vehicle_positions,
         "rt_tu": rt.trip_updates,
         "rt_al": rt.service_alerts,
@@ -43,6 +43,7 @@ def viz_url(feed: Feed) -> str:
 def editor_url(feed: Feed) -> str | None:
     """Build an edit.gtfs.zone link that opens this feed's static GTFS in the
     editor. Returns ``None`` when the feed has no static URL to load."""
-    if not feed.static_feed_url:
+    url = feed_static_url(feed)
+    if not url:
         return None
-    return f"{EDITOR_BASE}/#load={quote(feed.static_feed_url, safe='')}"
+    return f"{EDITOR_BASE}/#load={quote(url, safe='')}"

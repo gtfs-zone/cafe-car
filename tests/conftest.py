@@ -56,8 +56,14 @@ def engine() -> AsyncEngine:
 async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession]:
     """A clean database per test."""
     async with engine.begin() as conn:
+        # `feed.current_upload_id` and `gtfs_upload.feed_id` point at each
+        # other, so there is no order the drop can take with foreign keys on:
+        # SQLite cannot ALTER a constraint away the way the cycle's `use_alter`
+        # expects. Off for the teardown, back on for the test.
+        await conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
         await conn.run_sync(SQLModel.metadata.drop_all)
         await conn.run_sync(SQLModel.metadata.create_all)
+        await conn.exec_driver_sql("PRAGMA foreign_keys=ON")
 
     # expire_on_commit=False mirrors cafe_car.database.get_session_factory: the
     # code under test reads attributes off objects after committing them.

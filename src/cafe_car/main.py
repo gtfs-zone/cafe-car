@@ -11,6 +11,7 @@ from cafe_car.routers.catalog import router as catalog_router
 from cafe_car.routers.gtfs_rt import router as gtfs_rt_router
 from cafe_car.routers.ingest import router as ingest_router
 from cafe_car.routers.internal import router as internal_router
+from cafe_car.routers.static_feed import router as static_feed_router
 from cafe_car.settings import get_settings
 
 
@@ -46,6 +47,10 @@ def create_public_app() -> FastAPI:
         )
 
     app.include_router(gtfs_rt_router)
+    # Beside the `.pb` routes and matched the same way: every path here is a
+    # literal filename under `/{feed_name}/`, so nothing is a catch-all and the
+    # include order between them does not matter.
+    app.include_router(static_feed_router)
     # In the schema unconditionally, unlike the two below: this one is public
     # API that another site consumes, so its shape is worth publishing.
     app.include_router(catalog_router)

@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     # `Authorization: Bearer <token>`. Separate secret from the Traccar token.
     ingest_api_token: str | None = None
 
+    # An uploaded GTFS zip is read into memory whole, so the cap is a memory
+    # bound as well as a policy. Mirrors schedule-foamer's
+    # `max_gtfs_zip_bytes`: a zip this app accepts must be one the loader will
+    # still read.
+    max_gtfs_zip_bytes: int = 31457280  # 30 MB
+    # How many uploads a feed keeps, newest first. The current one is kept
+    # whatever its age, so a rollback target never sweeps itself away.
+    keep_uploads: int = 10
+
     # Traccar integration (device provisioning).
     traccar_url: str = "http://traccar:8082"
     # Auth: prefer a bearer API token; fall back to Basic auth (email/password).

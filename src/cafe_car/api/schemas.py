@@ -28,6 +28,7 @@ from pydantic import (
 
 # Runtime imports: pydantic resolves these annotations when it builds the
 # alert models, so a TYPE_CHECKING block would break them.
+from railroad_club.models.gtfs_upload import FeedSourceKind
 from railroad_club.models.tracker_rule import ExceptionType
 
 from cafe_car.alert_enums import (
@@ -72,10 +73,38 @@ class LoadStatusOut(BaseModel):
     next_retry_at: datetime | None
 
 
+class GtfsUploadOut(BaseModel):
+    """One uploaded schedule zip, as the feed page's history shows it.
+
+    ``object_key`` is not here. It is where the bytes are in the bucket, which
+    is nobody's business outside the two apps that read it; the client works in
+    upload ids and in the public URL.
+    """
+
+    id: str
+    sha256: str
+    size_bytes: int
+    original_filename: str
+    uploaded_by_user_id: int | None
+    uploaded_at: datetime
+    # Whether this is the upload the feed is currently serving. The one thing
+    # a client would otherwise have to derive by comparing ids.
+    is_current: bool
+
+
 class FeedOut(BaseModel):
     id: int
     feed_name: str
-    static_feed_url: str
+    # 'url' or 'hosted'. Mirrors `FeedSourceKind`; a string here because the
+    # client switches on it and an enum would serialize the same anyway.
+    source_kind: str
+    # Null on a hosted feed, which has no upstream URL to show.
+    static_feed_url: str | None
+    # Where a consumer downloads the schedule: our own permanent URL when
+    # hosted, the upstream one when not.
+    hosted_url: str | None
+    # The upload being served, or null on a url-sourced feed.
+    current_upload: GtfsUploadOut | None
     owner_id: int
     owner_name: str | None
     # Whether this caller *is* the owner. A fact about the row, so an admin
@@ -93,10 +122,33 @@ class FeedOut(BaseModel):
 
 
 class FeedCreate(BaseModel):
-    """A new feed. The owner is the caller and is never taken from the body."""
+    """A new feed. The owner is the caller and is never taken from the body.
+
+    A hosted feed is created empty and its zip is uploaded afterwards, so
+    ``static_feed_url`` is required for a url feed and refused for a hosted
+    one. The check is on the model rather than in the route because it is a
+    fact about the pair of fields, not about who is asking.
+    """
 
     feed_name: str
-    static_feed_url: str
+    source_kind: str = FeedSourceKind.url
+    static_feed_url: str | None = None
+
+    @field_validator("source_kind")
+    @classmethod
+    def check_source_kind(cls, v: str) -> str:
+        if v not in tuple(FeedSourceKind):
+            allowed = ", ".join(FeedSourceKind)
+            raise ValueError(f"source_kind must be one of: {allowed}")
+        return v
+
+    @model_validator(mode="after")
+    def check_source(self) -> FeedCreate:
+        if self.source_kind == FeedSourceKind.url and not self.static_feed_url:
+            raise ValueError("A linked feed needs a static feed URL")
+        if self.source_kind == FeedSourceKind.hosted and self.static_feed_url:
+            raise ValueError("A hosted feed has no static feed URL")
+        return self
 
     @field_validator("feed_name")
     @classmethod
@@ -110,7 +162,9 @@ class FeedCreate(BaseModel):
 
     @field_validator("static_feed_url")
     @classmethod
-    def check_url(cls, v: str) -> str:
+    def check_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
         try:
             _url_validator.validate_python(v)
         except Exception:
@@ -270,10 +324,12 @@ class FeedUpdate(BaseModel):
     """
 
     feed_name: str | None = None
+    source_kind: str | None = None
     static_feed_url: str | None = None
 
     _check_name = field_validator("feed_name")(FeedCreate.check_name.__func__)  # type: ignore[attr-defined]
     _check_url = field_validator("static_feed_url")(FeedCreate.check_url.__func__)  # type: ignore[attr-defined]
+    _check_kind = field_validator("source_kind")(FeedCreate.check_source_kind.__func__)  # type: ignore[attr-defined]
 
 
 class FeedTransfer(BaseModel):
