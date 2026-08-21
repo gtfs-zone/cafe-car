@@ -176,6 +176,10 @@ class FeedAdmin(ScopedModelView, model=Feed):
         # across every attribute, which lazy-loads this one on a detached
         # instance and blows up the edit form.
         "invites",
+        # And again for the upload history. Uploads are created and rolled back
+        # through the API, never here.
+        "uploads",
+        "current_upload",
     ]
     name = "Feed"
     name_plural = "Feeds"
