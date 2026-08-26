@@ -89,6 +89,14 @@ Rules for anything added under `/api`:
 - `GET /api/feeds` scopes through `personal_feed_ids`, which does not apply the
   admin bypass; `?all=1` is how an admin opts in, and it is refused to everyone
   else.
+- `GET /api/feeds/{id}/schedule.zip` is the one URL yard-master downloads a
+  schedule from, whichever source kind the feed is: a hosted feed streams the
+  current upload (the same body-and-headers helper as the public
+  `/{feed_name}/gtfs.zip`), a linked feed is fetched here from
+  `static_feed_url` and streamed back with no ETag. The browser never fetches
+  the public URL itself: that URL is prod-only and a linked feed's CORS
+  policy would refuse it anyway; this endpoint is same-origin and reads
+  whatever the feed row already points at.
 
 The current user id flows via `request.session["user_id"]` and via `current_user_id_var` (`ContextVar`) for use in `scaffold_form`, where `request` is unavailable. The ContextVar is set inside `authenticate`, not in the middleware, because middleware runs *before* authentication, so it would otherwise lag a request behind and hand a switched-over browser the previous user's data.
 

@@ -64,7 +64,7 @@ async def _current_upload(feed_name: str, session: AsyncSession) -> GtfsUpload:
     return upload
 
 
-def _headers(upload: GtfsUpload) -> dict[str, str]:
+def upload_headers(upload: GtfsUpload) -> dict[str, str]:
     # `uploaded_at` comes back aware from Postgres and naive from a backend
     # that does not keep the offset, and an HTTP date is always GMT, so it is
     # normalized here rather than trusted.
@@ -84,7 +84,7 @@ def _headers(upload: GtfsUpload) -> dict[str, str]:
     }
 
 
-def _not_modified(request: Request, upload: GtfsUpload) -> bool:
+def not_modified(request: Request, upload: GtfsUpload) -> bool:
     """Whether the caller already has these bytes.
 
     ``If-None-Match`` may carry a list and may weaken each entry, so the tags
@@ -104,8 +104,8 @@ async def static_feed_zip(
     session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> Response:
     upload = await _current_upload(feed_name, session)
-    headers = _headers(upload)
-    if _not_modified(request, upload):
+    headers = upload_headers(upload)
+    if not_modified(request, upload):
         return Response(status_code=304, headers=headers)
 
     try:
@@ -139,5 +139,5 @@ async def static_feed_zip_head(
     return Response(
         status_code=200,
         media_type=ZIP_CONTENT_TYPE,
-        headers={**_headers(upload), "Content-Length": str(upload.size_bytes)},
+        headers={**upload_headers(upload), "Content-Length": str(upload.size_bytes)},
     )

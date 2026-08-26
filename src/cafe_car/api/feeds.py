@@ -27,7 +27,8 @@ from __future__ import annotations
 
 import contextlib
 
-from fastapi import APIRouter, HTTPException, Query, Response
+import httpx
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from railroad_club.models.feed import Feed
 from railroad_club.models.gtfs_static import GtfsStaticFeed
 from railroad_club.models.gtfs_upload import (
@@ -40,7 +41,11 @@ from railroad_club.models.service_alert import ServiceAlert
 from railroad_club.models.tracker import Tracker
 from railroad_club.models.tracker_rule import TrackerRule, TrackerRuleException
 from railroad_club.models.user import User
-from railroad_club.object_store import ObjectStoreError, get_async_object_store
+from railroad_club.object_store import (
+    ObjectNotFound,
+    ObjectStoreError,
+    get_async_object_store,
+)
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
@@ -63,11 +68,17 @@ from cafe_car.api.schemas import (
 from cafe_car.api.uploads import upload_out
 from cafe_car.feed_load import request_feed_load
 from cafe_car.feed_urls import feed_rt_urls, feed_static_url
+from cafe_car.routers.static_feed import ZIP_CONTENT_TYPE, not_modified, upload_headers
 from cafe_car.settings import get_settings
 from cafe_car.sharing import transfer_ownership
 from cafe_car.traccar import retire_device
 
 router = APIRouter()
+
+# How long the linked branch of `schedule.zip` waits on the upstream host
+# before giving up. Generous next to the loader's own fetch, since a browser
+# waiting on this is a person, not a retry queue.
+SCHEDULE_ZIP_TIMEOUT = 20.0
 
 
 def _load_status(static: GtfsStaticFeed | None) -> LoadStatusOut | None:
@@ -243,6 +254,78 @@ async def reload_feed(feed: AccessibleFeed) -> Response:
     """
     request_feed_load(feed.id)
     return Response(status_code=202)
+
+
+@router.get("/feeds/{feed_id}/schedule.zip")
+async def feed_schedule_zip(
+    feed: AccessibleFeed, request: Request, session: DBSession
+) -> Response:
+    """The zip yard-master downloads, whichever source kind the feed is.
+
+    Same origin either way, so the browser never has to guess where the bytes
+    live and never hits a linked feed's CORS policy. A hosted feed streams
+    what ``routers/static_feed.py`` already streams to the public, with the
+    same ETag and conditional GET. A linked feed has no upload to condition
+    on, so it is fetched fresh from ``static_feed_url`` and handed back with
+    no ETag. This is a read, so `require_csrf` lets it through untouched.
+    """
+    if feed.source_kind == FeedSourceKind.hosted:
+        upload = await _current_upload(session, feed)
+        if upload is None:
+            raise HTTPException(
+                status_code=404, detail="This feed has no schedule yet"
+            )
+        headers = upload_headers(upload)
+        if not_modified(request, upload):
+            return Response(status_code=304, headers=headers)
+        try:
+            body = await get_async_object_store().get(upload.object_key)
+        except ObjectNotFound:
+            raise HTTPException(
+                status_code=500, detail="The stored schedule is missing"
+            ) from None
+        except ObjectStoreError:
+            raise HTTPException(
+                status_code=503, detail="Object storage is unavailable"
+            ) from None
+        return Response(content=body, media_type=ZIP_CONTENT_TYPE, headers=headers)
+
+    if not feed.static_feed_url:
+        raise HTTPException(status_code=404, detail="This feed has no schedule")
+
+    max_bytes = get_settings().max_gtfs_zip_bytes
+    try:
+        async with (
+            httpx.AsyncClient(
+                timeout=SCHEDULE_ZIP_TIMEOUT, follow_redirects=True
+            ) as upstream,
+            upstream.stream("GET", feed.static_feed_url) as response,
+        ):
+            if response.is_error:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Upstream answered {response.status_code}",
+                )
+            chunks: list[bytes] = []
+            received = 0
+            async for chunk in response.aiter_bytes():
+                received += len(chunk)
+                if received > max_bytes:
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Upstream schedule exceeds the size limit",
+                    )
+                chunks.append(chunk)
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Upstream timed out") from None
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+
+    return Response(
+        content=b"".join(chunks),
+        media_type=ZIP_CONTENT_TYPE,
+        headers={"Content-Disposition": 'attachment; filename="gtfs.zip"'},
+    )
 
 
 @router.patch("/feeds/{feed_id}")

@@ -18,6 +18,7 @@ import json
 import zipfile
 from typing import TYPE_CHECKING
 
+import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
 from railroad_club.models.feed import Feed
@@ -28,7 +29,7 @@ from sqlalchemy import func, select
 from tests.factories import PROVIDER, add_member, make_feed, make_user
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Awaitable, Callable
 
     from sqlalchemy.ext.asyncio import AsyncEngine
     from sqlmodel.ext.asyncio.session import AsyncSession
@@ -654,5 +655,136 @@ class TestPublicZip:
         self, public: AsyncClient, store: FakeStore
     ) -> None:
         response = await public.get("/no-such-feed/gtfs.zip")
+
+        assert response.status_code == 404
+
+
+def _upstream(
+    monkeypatch: pytest.MonkeyPatch,
+    handler: Callable[[httpx.Request], Awaitable[httpx.Response]],
+) -> None:
+    """Point `feeds.py`'s outbound client at a fake upstream."""
+
+    def factory(**kwargs: object) -> AsyncClient:
+        return AsyncClient(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr("cafe_car.api.feeds.httpx.AsyncClient", factory)
+
+
+class TestScheduleZip:
+    async def test_a_hosted_feed_streams_the_current_upload(
+        self, client: AsyncClient, world: dict, store: FakeStore, loads: list[int]
+    ) -> None:
+        feed = world["feed"]
+        upload = (await _upload(client, feed.id, gtfs_zip())).json()
+
+        response = await client.get(
+            f"/api/feeds/{feed.id}/schedule.zip", headers=OWNER
+        )
+
+        assert response.status_code == 200
+        assert response.content == gtfs_zip()
+        assert response.headers["etag"] == f'"{upload["sha256"]}"'
+
+    async def test_a_matching_etag_on_a_hosted_feed_is_a_304(
+        self, client: AsyncClient, world: dict, store: FakeStore, loads: list[int]
+    ) -> None:
+        feed = world["feed"]
+        upload = (await _upload(client, feed.id, gtfs_zip())).json()
+
+        response = await client.get(
+            f"/api/feeds/{feed.id}/schedule.zip",
+            headers={**OWNER, "If-None-Match": f'"{upload["sha256"]}"'},
+        )
+
+        assert response.status_code == 304
+
+    async def test_a_hosted_feed_with_no_upload_yet_is_a_404(
+        self, client: AsyncClient, world: dict
+    ) -> None:
+        response = await client.post(
+            "/api/feeds",
+            headers={**OWNER, **WRITE},
+            json={"feed_name": "empty-hosted", "source_kind": "hosted"},
+        )
+        feed_id = response.json()["id"]
+
+        response = await client.get(
+            f"/api/feeds/{feed_id}/schedule.zip", headers=OWNER
+        )
+
+        assert response.status_code == 404
+
+    async def test_a_linked_feed_is_fetched_from_its_url(
+        self, client: AsyncClient, world: dict, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def handler(request: httpx.Request) -> httpx.Response:
+            assert str(request.url) == world["feed"].static_feed_url
+            return httpx.Response(200, content=gtfs_zip())
+
+        _upstream(monkeypatch, handler)
+
+        response = await client.get(
+            f"/api/feeds/{world['feed'].id}/schedule.zip", headers=OWNER
+        )
+
+        assert response.status_code == 200
+        assert response.content == gtfs_zip()
+        assert "etag" not in response.headers
+
+    async def test_upstream_error_status_is_a_502(
+        self, client: AsyncClient, world: dict, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, content=b"nope")
+
+        _upstream(monkeypatch, handler)
+
+        response = await client.get(
+            f"/api/feeds/{world['feed'].id}/schedule.zip", headers=OWNER
+        )
+
+        assert response.status_code == 502
+
+    async def test_an_oversize_upstream_body_is_a_502(
+        self, client: AsyncClient, world: dict, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from cafe_car.settings import get_settings
+
+        get_settings.cache_clear()
+        monkeypatch.setenv("MAX_GTFS_ZIP_BYTES", "10")
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=gtfs_zip())
+
+        _upstream(monkeypatch, handler)
+
+        response = await client.get(
+            f"/api/feeds/{world['feed'].id}/schedule.zip", headers=OWNER
+        )
+
+        assert response.status_code == 502
+        get_settings.cache_clear()
+
+    async def test_upstream_timeout_is_a_504(
+        self, client: AsyncClient, world: dict, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectTimeout("timed out", request=request)
+
+        _upstream(monkeypatch, handler)
+
+        response = await client.get(
+            f"/api/feeds/{world['feed'].id}/schedule.zip", headers=OWNER
+        )
+
+        assert response.status_code == 504
+
+    async def test_a_stranger_gets_404_not_403(
+        self, client: AsyncClient, world: dict
+    ) -> None:
+        response = await client.get(
+            f"/api/feeds/{world['feed'].id}/schedule.zip", headers=STRANGER
+        )
 
         assert response.status_code == 404
