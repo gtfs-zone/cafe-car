@@ -1,6 +1,6 @@
 # cafe-car
 
-Core API for [GTFS.Zone](https://gtfs.zone): serves GTFS-RT feeds and provides an admin UI for managing feeds, trackers and service alerts.
+Core API for [GTFS.Zone](https://gtfs.zone): serves GTFS-RT feeds and the JSON API [yard-master](https://git.kcfam.us/gtfs.zone/yard-master) uses to manage feeds, trackers and service alerts. cafe-car has no UI of its own; yard-master is the UI.
 
 Part of a larger stack; see [deploy-gtfs-rt](https://git.kcfam.us/gtfs.zone/deploy-gtfs-rt) for the full deployment.
 
@@ -11,7 +11,7 @@ GitHub / Google / GitLab
     └─> Keycloak (OIDC provider, brokers all three onto one account)
             └─> oauth2-proxy (ForwardAuth)
                     └─> Traefik
-                            ├─> Admin app  (manage.rt.<domain>), auth-gated
+                            ├─> yard-master + admin app (manage.rt.<domain>), auth-gated
                             └─> Public API (rt.<domain>), no auth
                                     ├─> PostgreSQL (feeds, trackers, alerts, users)
                                     └─> Redis DB 1 (vehicle positions, trip updates)
@@ -33,7 +33,7 @@ There is no MQTT broker and no OwnTracks path any more: positions arrive over HT
 
 ## Trackers, not drivers
 
-A `Tracker` is one vehicle's credential. Its `id` is a secret pet-name (e.g. `gently-tender-oyster`) that doubles as the Traccar `uniqueId`, the Redis key namespace, and the `tracker_id` a producer posts under. There is no password. Creating a tracker in the admin auto-creates the matching Traccar device and renders a provisioning QR for the Traccar Client app.
+A `Tracker` is one vehicle's credential. Its `id` is a secret pet-name (e.g. `gently-tender-oyster`) that doubles as the Traccar `uniqueId`, the Redis key namespace, and the `tracker_id` a producer posts under. There is no password. Creating a tracker in yard-master auto-creates the matching Traccar device and renders a provisioning QR for the Traccar Client app.
 
 The `id` is never emitted in a feed. Vehicles are labelled with the tracker's public `nickname` instead.
 
@@ -52,7 +52,7 @@ A `TrackerRule` binds a tracker to a `trip_id` on a day-of-week and time window,
 | `GET /feeds` | Public feed catalog: every feed, its four URLs, and whether each realtime endpoint currently has anything in it |
 | `GET /health` | Liveness check (pings Redis + Postgres) |
 
-All of the above are unauthenticated. Feeds are configured in the admin UI.
+All of the above are unauthenticated. Feeds are configured in yard-master.
 
 ### Ingest API
 
@@ -86,11 +86,11 @@ uv run fastapi dev src/cafe_car/main.py        # public API → http://localhost
 uv run fastapi dev src/cafe_car/admin_main.py  # admin app  → http://localhost:8001
 ```
 
-The admin app mounts at `/`, not at `/admin`. To simulate oauth2-proxy headers locally:
+The admin app has no UI of its own; it serves yard-master's JSON API at `/api`. To simulate oauth2-proxy headers locally:
 
 ```bash
 curl -H "X-Auth-Request-User: alice" -H "X-Auth-Request-Email: alice@example.com" \
-     http://localhost:8001/
+     http://localhost:8001/api/me
 ```
 
 `X-Auth-Request-User` is the OIDC subject and is the only thing identifying the caller; the header alone creates the `User` and `Identity` on first use. Paths that need a *verified* email (invite claiming, account linking) also want a token: see CLAUDE.md for the unsigned-JWT recipe under `DEBUG=true`.
@@ -124,7 +124,7 @@ uv run scripts/simulate_trip.py --tracker <tracker-id> \
     --trip ELLSWB --speed 30 --interval 1
 ```
 
-The tracker must exist in the database (created via the admin UI), and the token must match `INGEST_API_TOKEN`, for the positions to appear in the feed.
+The tracker must exist in the database (created via yard-master), and the token must match `INGEST_API_TOKEN`, for the positions to appear in the feed.
 
 ### `provision_source.py`
 

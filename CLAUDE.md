@@ -6,7 +6,7 @@ FastAPI service that:
 - Sits behind oauth2-proxy forward auth (Traefik middleware) using Keycloak as the OIDC provider, which brokers GitHub / Google / GitLab
 - Manages config data (Feeds, Trackers) in PostgreSQL via SQLModel; the models and their Alembic revisions come from railroad-club
 - Exposes GTFS-RT protobuf endpoints (`/<feed_name>/*.pb`) for trip updates, vehicle positions, and service alerts
-- Provides a scoped SQLAdmin interface at `/admin` where a user sees only the Feeds they own or have been given access to, and the Trackers beneath them
+- Serves [yard-master](https://git.kcfam.us/gtfs.zone/yard-master)'s JSON API at `/api`, scoped to the Feeds a user owns or has been given access to, and the Trackers beneath them. yard-master, a static SPA, is the UI for this; cafe-car itself has none
 
 ## Commands
 
@@ -31,7 +31,8 @@ GitHub / Google / GitLab OAuth
     └─> Keycloak (OIDC provider, brokers the above; links them to one account)
             └─> oauth2-proxy (ForwardAuth middleware, auth.gtfs.zone)
                     └─> Traefik
-                            ├─> FastAPI admin app (manage.rt.gtfs.zone), protected by oauth2-proxy
+                            ├─> nginx serving yard-master (manage.rt.gtfs.zone), protected by oauth2-proxy
+                            │       └─> FastAPI admin app, same host, /api
                             └─> FastAPI public API (rt.gtfs.zone), no auth required
                                     ├─> PostgreSQL (railroad-club models + migrations)
                                     └─> Redis DB 1  (cache / RT data)
@@ -68,14 +69,7 @@ The public GTFS-RT endpoints (`rt.gtfs.zone`) have **no authentication middlewar
 There are two separate FastAPI apps sharing the same DB/Redis:
 
 - `src/cafe_car/main.py` → **public API** (`app = create_public_app()`): GTFS-RT endpoints (`/{feed_name}/trip_updates.pb`, `vehicle_positions.pb`, `service_alerts.pb`, plus a `.json` twin of each), the public feed catalog (`GET /feeds`) and the HTTP ingest seam (`POST /ingest/position`, `/ingest/trip-update`, `/ingest/alerts`). Run with `uv run fastapi dev src/cafe_car/main.py`.
-- `src/cafe_car/admin_main.py` → **admin app** (`app = create_admin_app()`): SQLAdmin interface mounted at `/`. Uses `OIDCAuthBackend`, `SessionMiddleware`, `DBSessionMiddleware`, and `SubjectMiddleware`. Run with `uv run fastapi dev src/cafe_car/admin_main.py`.
-
-The admin app also serves `src/cafe_car/api/` at `/api`, which is
-[yard-master](https://git.kcfam.us/gtfs.zone/yard-master)'s JSON API. It is
-mounted here rather than on the public app so it inherits the oauth2-proxy
-headers, the DB session and the identity resolution the admin already has, and
-it is included **before** `Admin`, for the same reason `entity_router` is: the
-mount at `/` swallows anything registered after it.
+- `src/cafe_car/admin_main.py` → **admin app** (`app = create_admin_app()`): [yard-master](https://git.kcfam.us/gtfs.zone/yard-master)'s JSON API, mounted at `/api`, plus `admin/entity_router.py`'s hand-written routes (sharing, account linking). No SQLAdmin any more — this app has no HTML UI of its own; yard-master, a separate static SPA, is that UI now. Uses `SessionMiddleware`, `DBSessionMiddleware`, and `SubjectMiddleware`. Run with `uv run fastapi dev src/cafe_car/admin_main.py`.
 
 Rules for anything added under `/api`:
 
@@ -98,22 +92,20 @@ Rules for anything added under `/api`:
   policy would refuse it anyway; this endpoint is same-origin and reads
   whatever the feed row already points at.
 
-The current user id flows via `request.session["user_id"]` and via `current_user_id_var` (`ContextVar`) for use in `scaffold_form`, where `request` is unavailable. The ContextVar is set inside `authenticate`, not in the middleware, because middleware runs *before* authentication, so it would otherwise lag a request behind and hand a switched-over browser the previous user's data.
+The current user id flows via `request.session["user_id"]` and via
+`current_user_id_var` (`ContextVar`). `admin/auth.py::resolve_request_user_id`
+is the fast, read-only lookup every request goes through first; when a
+subject has no `Identity` row yet, `ensure_identity` (same file) creates one,
+claims any invites waiting on its verified email, and primes the session —
+the provisioning that `OIDCAuthBackend.authenticate` used to do before
+SQLAdmin was removed. `OIDCAuthBackend` itself is unused now but not yet
+deleted; see the note on the `sqladmin` pin in `pyproject.toml`.
 
-**There are no details pages.** Every view subclasses `ScopedModelView`, which
-sets `can_view_details = False`, so `/{identity}/details/{pk}` returns 403. The
-edit page is the only page for an object and shows non-editable fields read-only;
-`/feed/edit/{id}` is the hub, linking to the feed's trackers, alerts and people.
-`templates/sqladmin/list.html` is a **fork** of the pinned sqladmin's copy (row
-actions moved right and reduced to delete; relation cells link to `admin:edit`,
-since `admin:details` now 403s); re-check it whenever the `sqladmin` pin moves.
-
-htmx is vendored at `admin/static/htmx.min.js`, served from `/vendor/htmx.min.js`
-and loaded once in `base.html`. Do not add per-template CDN `<script>` tags: a
-page that forgets one leaves its panels reading "Loading…" forever, which is
-exactly how the sharing UI shipped broken.
-
-`admin/entity_router.py` holds the routes that sit **outside** SQLAdmin (sharing, account linking, htmx partials). Nothing runs `authenticate` for them, so they take the proxy header as authoritative and fall back to user id `0`, never to the session cookie, which may belong to whoever used the browser last. They are registered *before* `Admin` mounts at `/`, or the mount swallows them.
+`admin/entity_router.py` holds hand-written routes (sharing, account linking,
+and some htmx partials left from the retired SQLAdmin pages). Nothing runs
+`resolve_request_user_id`'s slow path for them automatically; they take the
+proxy header as authoritative and fall back to user id `0`, never to the
+session cookie, which may belong to whoever used the browser last.
 
 ## Redis Data Format
 
@@ -150,12 +142,12 @@ uv run fastapi dev src/cafe_car/admin_main.py  # admin app  → :8001
 ```
 
 API docs: http://localhost:8000/docs
-Admin:    http://localhost:8001/ (SQLAdmin mounts at the root, not at /admin)
+Admin app: http://localhost:8001/api (no UI of its own; yard-master is the UI, run separately)
 
 To simulate oauth2-proxy headers locally:
 ```bash
 curl -H "X-Auth-Request-User: alice" -H "X-Auth-Request-Email: alice@example.com" \
-     http://localhost:8001/
+     http://localhost:8001/api/me
 ```
 
 `X-Auth-Request-User` is the OIDC subject and is the only thing that identifies the caller; the header alone creates the `User` and `Identity` on first use. To simulate a *verified* email (needed for invite claiming and account linking, both of which refuse unverified addresses), set `DEBUG=true` and pass an unsigned JWT whose `sub` matches the header:
@@ -183,10 +175,7 @@ curl -H "X-Auth-Request-User: alice" -H "Authorization: Bearer $TOKEN" http://lo
 - Never include `Co-Authored-By: Claude ...` trailers in commit messages.
 - Do not use Playwright / the browser automation tools. The user tests UI changes manually.
 - Never create a stop_time with null departure and arrival
-- Admin views must always scope queries through `accessible_feed_ids`; never expose a Feed or Tracker the caller neither owns nor is a member of
-- Never add a relationship to `Feed` without also excluding it from `FeedAdmin.form_excluded_columns`. WTForms walks every attribute and lazy-loads it on a detached instance, which raises `DetachedInstanceError` and breaks the edit form. This has now happened twice (`members`, `invites`)
-- Anything a `*_edit.html` template touches must be eager-loaded in that view's `form_edit_query`. SQLAdmin's `_run_query` closes its session before rendering, so a bare relationship access is a `DetachedInstanceError`, not a slow query
-- Never interpolate model text into `Markup(...)` in a `column_formatters` lambda; use `_link()` or `escape()`. `nickname`, `header_text` and `trip_id` are free text and `Tracker.id` is caller-supplied, so unescaped interpolation is stored XSS against everyone a feed is shared with
+- `/api` routes must always scope queries through `accessible_feed_ids`; never expose a Feed or Tracker the caller neither owns nor is a member of
 - Never match an invite or link two accounts on an **unverified** email; that is an account-takeover primitive
 - Use `uv` for all package management (never `pip install` directly)
 - Run `uv run ruff check src/` before committing

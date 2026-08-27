@@ -120,6 +120,84 @@ async def resolve_request_user_id(request: Request, session: AsyncSession) -> in
     return int(user_id or 0)
 
 
+async def ensure_identity(request: Request, session: AsyncSession) -> int:
+    """Resolve the caller's ``User``, creating it and claiming invites on first
+    sight, and prime the session the way ``resolve_request_user_id`` expects.
+
+    This is the provisioning path: it writes a new ``User``/``Identity`` row
+    the first time a credential is seen and claims invites waiting on its
+    verified email. ``resolve_request_user_id`` is the fast, read-only lookup
+    that runs on every request; a caller reaches here only when that lookup
+    found nothing, so this can afford to be heavier. Returns 0, the same as
+    ``resolve_request_user_id``, when there is no subject header to resolve.
+    """
+    subject = request_subject(request)
+    if not subject:
+        return 0
+    settings = get_settings()
+    claims = verified_claims(request)
+    is_admin = claims_are_admin(claims)
+    email = claims.get("email") or request.headers.get("X-Auth-Request-Email") or None
+    # Only the token can vouch for an address being verified; the proxy header
+    # carries the address with no such claim attached. Account linking keys
+    # off this, so it must not be generous.
+    email_verified = bool(claims.get("email_verified") and claims.get("email"))
+    display_name = (claims.get("name") or "")[:128].strip() or None
+    # Which upstream provider Keycloak brokered this session through, from a
+    # user-session-note mapper on the client. A direct realm login has no such
+    # note, so the claim is simply absent. Display only; `provider_subject` is
+    # still what identifies the caller.
+    broker_alias = (claims.get("identity_provider") or "")[:64].strip() or None
+
+    user, link_candidate_id = await resolve_login(
+        session,
+        provider=settings.oidc_provider,
+        subject=subject,
+        email=email,
+        email_verified=email_verified,
+        display_name=display_name,
+        broker_alias=broker_alias,
+    )
+    if link_candidate_id is not None:
+        # Two principals, one human. Keycloak's first-broker-login flow
+        # normally links these upstream, so reaching here means something
+        # bypassed it. /account offers the merge; this line is so the
+        # duplicate is visible in the log even if they never take it up.
+        logger.warning(
+            "ensure_identity: new user=%s duplicates user=%s on %s",
+            user.id,
+            link_candidate_id,
+            email,
+        )
+    # Feeds shared with them before they had an account. Matched on verified
+    # addresses only, inside claim_invites.
+    await claim_invites(session, user)
+
+    prior = dict(request.session)
+    request.session.clear()
+    # Authoritative for this request. SubjectMiddleware primes the var from
+    # the session before we get here, which is a request behind: on the first
+    # request of a session it is still 0, and on a browser that switches users
+    # it still holds the *previous* user. Overwrite it now that the identity
+    # is actually known.
+    current_user_id_var.set(user.id)
+    current_user_is_admin_var.set(is_admin)
+    # user_id is what every scoped query filters on. `subject` is kept for
+    # display and debugging only; nothing authorises against it any more.
+    request.session["user_id"] = user.id
+    request.session["subject"] = subject
+    if user.display_name:
+        request.session["display_name"] = user.display_name
+    if user.primary_email:
+        request.session["email"] = user.primary_email
+    # Carry dismissals across the clear above, but only for the same person; a
+    # browser that switched users must not inherit the previous one's "don't
+    # ask me again".
+    if prior.get("user_id") == user.id and prior.get("link_dismissed"):
+        request.session["link_dismissed"] = prior["link_dismissed"]
+    return user.id
+
+
 class OIDCAuthBackend(AuthenticationBackend):
     async def login(self, request: Request) -> bool:
         return True  # Traefik/oauth2-proxy handles login redirect
@@ -137,75 +215,10 @@ class OIDCAuthBackend(AuthenticationBackend):
             )
             return False
         try:
-            settings = get_settings()
-            claims = verified_claims(request)
-            is_admin = claims_are_admin(claims)
-            email = (
-                claims.get("email")
-                or request.headers.get("X-Auth-Request-Email")
-                or None
-            )
-            # Only the token can vouch for an address being verified; the
-            # proxy header carries the address with no such claim attached.
-            # Account linking keys off this, so it must not be generous.
-            email_verified = bool(claims.get("email_verified") and claims.get("email"))
-            display_name = (claims.get("name") or "")[:128].strip() or None
-            # Which upstream provider Keycloak brokered this session through,
-            # from a user-session-note mapper on the client. A direct realm
-            # login has no such note, so the claim is simply absent. Display
-            # only; `provider_subject` is still what identifies the caller.
-            broker_alias = (claims.get("identity_provider") or "")[:64].strip() or None
-
             factory = get_session_factory()
             async with factory() as session:
-                user, link_candidate_id = await resolve_login(
-                    session,
-                    provider=settings.oidc_provider,
-                    subject=subject,
-                    email=email,
-                    email_verified=email_verified,
-                    display_name=display_name,
-                    broker_alias=broker_alias,
-                )
-                if link_candidate_id is not None:
-                    # Two principals, one human. Keycloak's first-broker-login
-                    # flow normally links these upstream, so reaching here means
-                    # something bypassed it. /account offers the merge; this
-                    # line is so the duplicate is visible in the log even if
-                    # they never take it up.
-                    logger.warning(
-                        "authenticate: new user=%s duplicates user=%s on %s",
-                        user.id,
-                        link_candidate_id,
-                        email,
-                    )
-                # Feeds shared with them before they had an account. Matched on
-                # verified addresses only, inside claim_invites.
-                await claim_invites(session, user)
+                user_id = await ensure_identity(request, session)
         except Exception:
             logger.exception("authenticate: DB error for subject=%s", subject)
             raise
-        prior = dict(request.session)
-        request.session.clear()
-        # Authoritative for this request. SubjectMiddleware primes the var from
-        # the session before we get here, which is a request behind: on the
-        # first request of a session it is still 0, and on a browser that
-        # switches users it still holds the *previous* user, which would feed
-        # their feed list into scaffold_form's dropdown. Overwrite it now that
-        # the identity is actually known.
-        current_user_id_var.set(user.id)
-        current_user_is_admin_var.set(is_admin)
-        # user_id is what every scoped query filters on. `subject` is kept for
-        # display and debugging only; nothing authorises against it any more.
-        request.session["user_id"] = user.id
-        request.session["subject"] = subject
-        if user.display_name:
-            request.session["display_name"] = user.display_name
-        if user.primary_email:
-            request.session["email"] = user.primary_email
-        # Carry dismissals across the clear above, but only for the same
-        # person; a browser that switched users must not inherit the previous
-        # one's "don't ask me again".
-        if prior.get("user_id") == user.id and prior.get("link_dismissed"):
-            request.session["link_dismissed"] = prior["link_dismissed"]
-        return True
+        return bool(user_id)

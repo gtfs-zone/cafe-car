@@ -6,8 +6,9 @@ description = "Core API for GTFS.Zone: serves GTFS-RT protobuf feeds and provide
 dependencies = [
     "fastapi[standard]",
     "sqlmodel",
-    # Pinned: src/cafe_car/admin/templates/sqladmin/list.html is a fork of this
-    # version's template. Bumping the pin means re-checking that fork.
+    # SQLAdmin's own views are gone; `admin/auth.py`'s OIDCAuthBackend still
+    # subclasses sqladmin.authentication.AuthenticationBackend, unused but not
+    # yet removed. Drop this once that class goes too.
     "sqladmin[full]==0.23.0",
     "asyncpg",
     "redis[asyncio]",

@@ -32,7 +32,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cafe_car.admin.access import accessible_feed_ids, owned_feed_ids
-from cafe_car.admin.auth import resolve_request_user_id
+from cafe_car.admin.auth import ensure_identity, resolve_request_user_id
 from cafe_car.admin.context import current_user_is_admin_var
 
 # The header yard-master sends on every mutation. Named for the app rather than
@@ -67,10 +67,14 @@ async def current_user_id(request: Request, session: DBSession) -> int:
     """The signed-in user, or 401.
 
     Reaching here without a subject header means oauth2-proxy is not in front
-    of the app; reaching it with one that resolves to nobody means the identity
-    row is gone. Neither is recoverable by retrying, so both are 401.
+    of the app; that alone is a 401, not recoverable by retrying. A subject
+    header with no existing Identity row is a first-sight credential, not an
+    error: ``ensure_identity`` creates the row and claims any invites waiting
+    on it, the same provisioning SQLAdmin's auth backend used to do.
     """
     user_id = await resolve_request_user_id(request, session)
+    if not user_id:
+        user_id = await ensure_identity(request, session)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not signed in")
     return user_id

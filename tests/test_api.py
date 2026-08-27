@@ -156,6 +156,26 @@ class TestMe:
         assert response.status_code == 401
         assert response.headers["content-type"].startswith("application/json")
 
+    async def test_a_credential_seen_for_the_first_time_is_provisioned(
+        self, client: AsyncClient, world: dict
+    ) -> None:
+        """No SQLAdmin auth backend runs ahead of this any more: `/api` has to
+        create the Identity itself the first time a subject shows up, the way
+        `OIDCAuthBackend.authenticate` used to."""
+        headers = _headers("kc-newbie", "newbie@example.com")
+
+        first = await client.get("/api/me", headers=headers)
+        assert first.status_code == 200
+        body = first.json()
+        assert body["email"] == "newbie@example.com"
+
+        # Same subject, same account: a second request has to reuse the row
+        # rather than provisioning a duplicate every time.
+        client.cookies.clear()
+        second = await client.get("/api/me", headers=headers)
+        assert second.status_code == 200
+        assert second.json()["user_id"] == body["user_id"]
+
 
 class TestFeedList:
     async def test_lists_owned_and_shared_feeds_only(
@@ -1053,15 +1073,6 @@ class TestReloadFeed:
 
         assert response.status_code == 404
         assert loads == []
-
-
-async def test_the_old_admin_still_answers(client: AsyncClient, world: dict) -> None:
-    """The API router is registered before Admin mounts at "/". Registering it
-    after would have swallowed it; registering it wrongly could swallow the
-    admin. Both halves have to still work."""
-    response = await client.get("/feed/list", headers=OWNER, follow_redirects=False)
-
-    assert response.status_code == 200
 
 
 @pytest.fixture
