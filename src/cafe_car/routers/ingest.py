@@ -10,6 +10,7 @@ code needs zero changes.
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
@@ -36,7 +37,27 @@ from cafe_car.vehicle_payload import redis_key, vehicle_view
 if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession
 
+log = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+async def _resolve_tracker(session: AsyncSession, tracker_id: str) -> Tracker | None:
+    """Look a tracker up by surrogate id, falling back to its ``device_key``.
+
+    Same id-then-``device_key`` order as ``provisioning.upsert_tracker``. Accepting
+    both means a producer configured with the readable ``device_key`` still lands in
+    the namespace the serving side scans, instead of writing to
+    ``vehicle:{device_key}:*`` where nothing reads. Callers must key Redis off the
+    returned ``tracker.id``, never off what the producer sent.
+    """
+    tracker = await session.get(Tracker, tracker_id)
+    if tracker is None:
+        tracker = await session.scalar(
+            select(Tracker).where(Tracker.device_key == tracker_id)
+        )
+    return tracker
+
 
 # GTFS-RT VehicleStopStatus, by name. Every one of them names a stop: the
 # vehicle is approaching, sitting at, or heading to *that* stop, so a status is
@@ -52,8 +73,9 @@ TRIP_UPDATE_TTL = 300
 
 
 class PositionIngest(BaseModel):
-    # The tracker's surrogate id (`Tracker.id`), not its `device_key`. Selects
-    # the `vehicle:{tracker_id}:*` namespace cafe-car scans. Not a credential:
+    # The tracker's surrogate id (`Tracker.id`); its `device_key` is also accepted
+    # and normalised to the surrogate id before anything is written. Selects the
+    # `vehicle:{Tracker.id}:*` namespace cafe-car scans. Not a credential:
     # `/ingest/*` is authenticated by the shared token in `_check_auth`.
     tracker_id: str
     # Public per-vehicle identity. One tracker credential can fan out to many
@@ -191,13 +213,19 @@ async def ingest_position(
 ) -> dict[str, str]:
     _check_auth(authorization)
 
+    # Resolve before building the record: everything downstream keys off the
+    # surrogate id, so a producer sending a `device_key` must be normalised here
+    # rather than at each use.
+    tracker = await _resolve_tracker(session, body.tracker_id)
+    tracker_id = tracker.id if tracker is not None else body.tracker_id
+
     # Byte-for-byte the record the vehicle-poser shim writes; keys read by
     # gtfs_rt.py::vehicle_positions (tracker_id, trip_id, lat, lon, bearing,
     # speed, timestamp, optional route_id, optional public vehicle_id/label,
     # optional current_stop_sequence/stop_id/current_status). Producers that
     # predate a key simply omit it; the serialiser reads with .get().
     record: dict[str, object] = {
-        "tracker_id": body.tracker_id,
+        "tracker_id": tracker_id,
         "trip_id": body.trip_id,
         "lat": body.lat,
         "lon": body.lon,
@@ -222,20 +250,27 @@ async def ingest_position(
         record["current_status"] = body.current_status
 
     redis = request.app.state.redis
-    key = redis_key(body.tracker_id, body.trip_id, body.start_date)
+    key = redis_key(tracker_id, body.trip_id, body.start_date)
     await redis.setex(key, POSITION_TTL, json.dumps(record))
 
-    # Push the fix to whoever is watching this feed's channel. The record knows
-    # a tracker and not a feed, so this costs one lookup by primary key per fix;
-    # that is the price of a live map, and the tracker is what supplies the
-    # nickname the vehicle is labelled with anyway.
+    # Push the fix to whoever is watching this feed's channel. The tracker is
+    # what supplies the nickname the vehicle is labelled with, and the record
+    # knows a tracker and not a feed, which is why it was resolved above.
     #
     # A tracker_id that resolves to nothing is stored and not published rather
     # than rejected: the token is what authorises ingest, the serving side only
     # ever scans the trackers it knows, and a producer configured with a stale
-    # id has always been allowed to write into a namespace nobody reads.
-    tracker = await session.get(Tracker, body.tracker_id)
-    if tracker is not None:
+    # id has always been allowed to write into a namespace nobody reads. It is
+    # logged because that silence once hid a misconfigured poller for five weeks:
+    # every POST answered 200 while the feed served an empty protobuf.
+    if tracker is None:
+        log.warning(
+            "Ingested position for unknown tracker_id=%r; stored at %s but not "
+            "published, and no feed will serve it",
+            body.tracker_id,
+            key,
+        )
+    else:
         view = vehicle_view(tracker.id, tracker.nickname, record)
         await redis.publish(
             feed_channel(tracker.feed_id), json.dumps(position_event(view))
@@ -268,6 +303,9 @@ async def ingest_trip_update(
         record["vehicle_id"] = body.vehicle_id
     if body.vehicle_label:
         record["vehicle_label"] = body.vehicle_label
+    # No tracker resolution here: the key is trip-scoped and gtfs_rt.py never
+    # reads the record's tracker_id back, so a lookup would buy nothing. The
+    # record is only ever reached via a vehicle key, which is already resolved.
     key = _trip_update_key(body.trip_id, body.start_date)
     await request.app.state.redis.setex(key, TRIP_UPDATE_TTL, json.dumps(record))
     return {"status": "ok"}
@@ -281,7 +319,7 @@ async def ingest_alerts(
 ) -> dict[str, str | int]:
     _check_auth(authorization)
 
-    tracker = await session.get(Tracker, body.tracker_id)
+    tracker = await _resolve_tracker(session, body.tracker_id)
     if tracker is None:
         raise HTTPException(status_code=403, detail="Invalid ingest token")
     feed_id = tracker.feed_id

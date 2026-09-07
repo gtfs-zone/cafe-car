@@ -22,6 +22,7 @@ What is asserted here and nowhere else:
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -408,3 +409,63 @@ class TestPositionPublish:
         assert response.status_code == 200
         assert "vehicle:nobody-at-all:T1" in redis.data
         assert redis.published == []
+
+    async def test_a_device_key_lands_in_the_surrogate_id_namespace(
+        self, make_public_client: ClientFactory, world: dict
+    ) -> None:
+        """A producer configured with the readable device_key still works.
+
+        The serving side only ever scans `vehicle:{Tracker.id}:*`, so a device_key
+        that was stored verbatim would be written where nothing reads it. This is
+        the shape that broke hell-gate-bridge for five weeks.
+        """
+        redis = FakeRedis()
+        client = await make_public_client(redis)
+
+        response = await client.post(
+            "/ingest/position",
+            headers={"Authorization": f"Bearer {INGEST_TOKEN}"},
+            json={
+                "tracker_id": world["reporting"].device_key,
+                "trip_id": "T1",
+                "lat": 42.0,
+                "lon": -71.0,
+                "timestamp": 1_700_000_000,
+            },
+        )
+
+        assert response.status_code == 200
+        assert "vehicle:gently-tender-oyster:T1" in redis.data
+        assert f"vehicle:{world['reporting'].device_key}:T1" not in redis.data
+        # The stored record carries the surrogate id too, not what was sent.
+        assert (
+            json.loads(redis.data["vehicle:gently-tender-oyster:T1"])["tracker_id"]
+            == "gently-tender-oyster"
+        )
+        # Resolved, so it publishes like any known tracker.
+        assert redis.published != []
+
+    async def test_an_unknown_tracker_is_logged(
+        self,
+        make_public_client: ClientFactory,
+        world: dict,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Storing without publishing is deliberate, but must not be silent."""
+        redis = FakeRedis()
+        client = await make_public_client(redis)
+
+        with caplog.at_level(logging.WARNING, logger="cafe_car.routers.ingest"):
+            await client.post(
+                "/ingest/position",
+                headers={"Authorization": f"Bearer {INGEST_TOKEN}"},
+                json={
+                    "tracker_id": "nobody-at-all",
+                    "trip_id": "T1",
+                    "lat": 42.0,
+                    "lon": -71.0,
+                    "timestamp": 1_700_000_000,
+                },
+            )
+
+        assert "nobody-at-all" in caplog.text
