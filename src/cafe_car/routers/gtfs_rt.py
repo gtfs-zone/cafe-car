@@ -1,5 +1,6 @@
 import json
 import time
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -8,13 +9,14 @@ from google.protobuf import json_format
 from google.transit import gtfs_realtime_pb2
 from railroad_club.models.feed import Feed
 from railroad_club.models.service_alert import ServiceAlert
+from railroad_club.models.tracker import Tracker
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from cafe_car.alerts import active_alerts, to_utc
 from cafe_car.database import get_session
-from cafe_car.vehicle_payload import public_vehicle_id
+from cafe_car.vehicle_payload import live_vehicle_keys, public_vehicle_id
 
 router = APIRouter()
 
@@ -33,6 +35,32 @@ async def get_feed(
     return feed
 
 
+async def _feed_vehicle_records(
+    trackers: Sequence[Tracker], redis: object
+) -> list[tuple[Tracker, dict]]:
+    """Every live vehicle record under ``trackers``, one pass over the keyspace.
+
+    One SCAN for the whole request and one MGET, rather than a scan and a read
+    per tracker. Sorted by key so two polls a second apart order the feed the
+    same way; scan order is not stable. A key that expired between the scan and
+    the read is skipped rather than an error: presence is what freshness means.
+    """
+    by_tracker = await live_vehicle_keys(redis)
+    pairs = [
+        (tracker, key)
+        for tracker in trackers
+        for key in sorted(by_tracker.get(tracker.id, []))
+    ]
+    if not pairs:
+        return []
+    raws = await redis.mget([key for _, key in pairs])
+    return [
+        (tracker, json.loads(raw))
+        for (tracker, _), raw in zip(pairs, raws, strict=True)
+        if raw is not None
+    ]
+
+
 async def _build_trip_updates_feed(
     feed: Feed, session: AsyncSession, redis: object
 ) -> gtfs_realtime_pb2.FeedMessage:
@@ -41,55 +69,49 @@ async def _build_trip_updates_feed(
     msg.header.incrementality = gtfs_realtime_pb2.FeedHeader.FULL_DATASET
     msg.header.timestamp = int(time.time())
 
-    from railroad_club.models.tracker import Tracker
-
     result = await session.exec(select(Tracker).where(Tracker.feed_id == feed.id))
     trackers = result.all()
 
     # A >24h daily trip has several instances of the same trip_id live at once,
     # distinguished by start_date, so dedup on the pair, not trip_id alone.
     seen: set[tuple[str, str | None]] = set()
-    for tracker in trackers:
-        async for key in redis.scan_iter(f"vehicle:{tracker.id}:*"):
-            vehicle_raw = await redis.get(key)
-            if vehicle_raw is None:
-                continue
-            vehicle_data = json.loads(vehicle_raw)
-            trip_id = vehicle_data.get("trip_id")
-            start_date = vehicle_data.get("start_date")
-            if not trip_id or (trip_id, start_date) in seen:
-                continue
+    for tracker, vehicle_data in await _feed_vehicle_records(trackers, redis):
+        trip_id = vehicle_data.get("trip_id")
+        start_date = vehicle_data.get("start_date")
+        # Two vehicles genuinely running one trip instance yield one entity.
+        if not trip_id or (trip_id, start_date) in seen:
+            continue
 
-            tu_key = (
-                f"trip_update:{trip_id}:{start_date}"
-                if start_date
-                else f"trip_update:{trip_id}"
-            )
-            trip_raw = await redis.get(tu_key)
-            if trip_raw is None:
-                continue
-            trip_data = json.loads(trip_raw)
+        tu_key = (
+            f"trip_update:{trip_id}:{start_date}"
+            if start_date
+            else f"trip_update:{trip_id}"
+        )
+        trip_raw = await redis.get(tu_key)
+        if trip_raw is None:
+            continue
+        trip_data = json.loads(trip_raw)
 
-            seen.add((trip_id, start_date))
-            entity = msg.entity.add()
-            # Stable per trip-instance across polls; it is exactly the dedup key
-            # and carries no secret (unlike a scan-order counter, which reshuffled
-            # between polls and was unusable as a focus key).
-            entity.id = f"{trip_id}:{start_date}" if start_date else trip_id
-            entity.trip_update.trip.trip_id = trip_data["trip_id"]
-            entity.trip_update.trip.schedule_relationship = (
-                gtfs_realtime_pb2.TripDescriptor.SCHEDULED
-            )
-            if start_date:
-                entity.trip_update.trip.start_date = start_date
-            # Public per-vehicle id, never the tracker's device_key.
-            entity.trip_update.vehicle.id = public_vehicle_id(
-                tracker.nickname, trip_data.get("vehicle_id"), trip_id, start_date
-            )
-            entity.trip_update.timestamp = trip_data["timestamp"]
-            for update in _stop_time_updates(trip_data):
-                stu = entity.trip_update.stop_time_update.add()
-                _fill_stop_time_update(stu, update)
+        seen.add((trip_id, start_date))
+        entity = msg.entity.add()
+        # Stable per trip-instance across polls; it is exactly the dedup key
+        # and carries no secret (unlike a scan-order counter, which reshuffled
+        # between polls and was unusable as a focus key).
+        entity.id = f"{trip_id}:{start_date}" if start_date else trip_id
+        entity.trip_update.trip.trip_id = trip_data["trip_id"]
+        entity.trip_update.trip.schedule_relationship = (
+            gtfs_realtime_pb2.TripDescriptor.SCHEDULED
+        )
+        if start_date:
+            entity.trip_update.trip.start_date = start_date
+        # Public per-vehicle id, never the tracker's device_key.
+        entity.trip_update.vehicle.id = public_vehicle_id(
+            tracker.nickname, trip_data.get("vehicle_id")
+        )
+        entity.trip_update.timestamp = trip_data["timestamp"]
+        for update in _stop_time_updates(trip_data):
+            stu = entity.trip_update.stop_time_update.add()
+            _fill_stop_time_update(stu, update)
 
     return msg
 
@@ -163,80 +185,67 @@ async def _build_vehicle_positions_feed(
     msg.header.incrementality = gtfs_realtime_pb2.FeedHeader.FULL_DATASET
     msg.header.timestamp = int(time.time())
 
-    from railroad_club.models.tracker import Tracker
-
     result = await session.exec(select(Tracker).where(Tracker.feed_id == feed.id))
     trackers = result.all()
 
-    for tracker in trackers:
-        async for key in redis.scan_iter(f"vehicle:{tracker.id}:*"):
-            raw = await redis.get(key)
-            if raw is None:
-                continue
-            data = json.loads(raw)
-
-            trip_id = data.get("trip_id")
-            start_date = data.get("start_date")
-            entity = msg.entity.add()
-            # entity.id must be unique within the message and stable across polls,
-            # and per GTFS-RT so must the actual VehicleDescriptor.id below, so both
-            # share this derivation. One tracker can carry many concurrent vehicles
-            # (Amtrak's fleet under one credential), so the tracker nickname is only
-            # a fallback for single-device producers, folded with the trip instance
-            # when there are several.
-            public_id = data.get("vehicle_id")
-            vehicle_id = public_vehicle_id(
-                tracker.nickname, public_id, trip_id, start_date
+    for tracker, data in await _feed_vehicle_records(trackers, redis):
+        trip_id = data.get("trip_id")
+        start_date = data.get("start_date")
+        entity = msg.entity.add()
+        # entity.id must be unique within the message and stable across polls,
+        # and per GTFS-RT so must the actual VehicleDescriptor.id below, so both
+        # share this derivation. It is also what the record is keyed on, so
+        # two entities in this message cannot share it. The tracker nickname
+        # is the fallback for a single-device producer, which has one vehicle.
+        public_id = data.get("vehicle_id")
+        vehicle_id = public_vehicle_id(tracker.nickname, public_id)
+        entity.id = vehicle_id
+        # Public label only (the device_key is the secret credential).
+        entity.vehicle.vehicle.id = vehicle_id
+        entity.vehicle.vehicle.label = (
+            data.get("vehicle_label") or public_id or tracker.nickname
+        )
+        entity.vehicle.position.latitude = data["lat"]
+        entity.vehicle.position.longitude = data["lon"]
+        if data["bearing"] is not None:
+            entity.vehicle.position.bearing = data["bearing"]
+        if data["speed"] is not None:
+            entity.vehicle.position.speed = data["speed"]
+        if trip_id is not None:
+            # Only emit a TripDescriptor when the vehicle is tied to a trip.
+            # A tracker with no active rule resolves trip_id to None; that is
+            # a valid position (GTFS-RT trip is optional) and must not crash
+            # the whole feed by assigning None to a protobuf string field.
+            entity.vehicle.trip.trip_id = trip_id
+            entity.vehicle.trip.schedule_relationship = (
+                gtfs_realtime_pb2.TripDescriptor.SCHEDULED
             )
-            entity.id = vehicle_id
-            # Public label only (the device_key is the secret credential).
-            entity.vehicle.vehicle.id = vehicle_id
-            entity.vehicle.vehicle.label = (
-                data.get("vehicle_label") or public_id or tracker.nickname
-            )
-            entity.vehicle.position.latitude = data["lat"]
-            entity.vehicle.position.longitude = data["lon"]
-            if data["bearing"] is not None:
-                entity.vehicle.position.bearing = data["bearing"]
-            if data["speed"] is not None:
-                entity.vehicle.position.speed = data["speed"]
-            if trip_id is not None:
-                # Only emit a TripDescriptor when the vehicle is tied to a trip.
-                # A tracker with no active rule resolves trip_id to None; that is
-                # a valid position (GTFS-RT trip is optional) and must not crash
-                # the whole feed by assigning None to a protobuf string field.
-                entity.vehicle.trip.trip_id = trip_id
-                entity.vehicle.trip.schedule_relationship = (
-                    gtfs_realtime_pb2.TripDescriptor.SCHEDULED
+            # start_date disambiguates concurrent instances of a >24h daily
+            # trip (see ingest.py); pass it through so consumers can too.
+            if start_date:
+                entity.vehicle.trip.start_date = start_date
+            if route_id := data.get("route_id"):
+                entity.vehicle.trip.route_id = route_id
+        # Where the vehicle is along its trip. current_status names the stop
+        # in current_stop_sequence/stop_id, so all three are emitted together
+        # or not at all; this used to hardcode IN_TRANSIT_TO with no stop
+        # reference, which says nothing and left consumers unable to place
+        # the vehicle against the schedule. A producer that reports no
+        # current stop leaves the fields absent: current_status is a proto2
+        # field defaulting to IN_TRANSIT_TO, so absent on the wire is the
+        # honest "not reported" a presence-checking consumer can see.
+        current_stop_sequence = data.get("current_stop_sequence")
+        stop_id = data.get("stop_id")
+        if current_stop_sequence is not None or stop_id:
+            if current_stop_sequence is not None:
+                entity.vehicle.current_stop_sequence = current_stop_sequence
+            if stop_id:
+                entity.vehicle.stop_id = stop_id
+            if status := data.get("current_status"):
+                entity.vehicle.current_status = (
+                    gtfs_realtime_pb2.VehiclePosition.VehicleStopStatus.Value(status)
                 )
-                # start_date disambiguates concurrent instances of a >24h daily
-                # trip (see ingest.py); pass it through so consumers can too.
-                if start_date:
-                    entity.vehicle.trip.start_date = start_date
-                if route_id := data.get("route_id"):
-                    entity.vehicle.trip.route_id = route_id
-            # Where the vehicle is along its trip. current_status names the stop
-            # in current_stop_sequence/stop_id, so all three are emitted together
-            # or not at all; this used to hardcode IN_TRANSIT_TO with no stop
-            # reference, which says nothing and left consumers unable to place
-            # the vehicle against the schedule. A producer that reports no
-            # current stop leaves the fields absent: current_status is a proto2
-            # field defaulting to IN_TRANSIT_TO, so absent on the wire is the
-            # honest "not reported" a presence-checking consumer can see.
-            current_stop_sequence = data.get("current_stop_sequence")
-            stop_id = data.get("stop_id")
-            if current_stop_sequence is not None or stop_id:
-                if current_stop_sequence is not None:
-                    entity.vehicle.current_stop_sequence = current_stop_sequence
-                if stop_id:
-                    entity.vehicle.stop_id = stop_id
-                if status := data.get("current_status"):
-                    entity.vehicle.current_status = (
-                        gtfs_realtime_pb2.VehiclePosition.VehicleStopStatus.Value(
-                            status
-                        )
-                    )
-            entity.vehicle.timestamp = data["timestamp"]
+        entity.vehicle.timestamp = data["timestamp"]
 
     return msg
 

@@ -10,10 +10,11 @@ What is asserted here and nowhere else:
 
 * The endpoint is **scoped**. It answers with a fleet's live locations, which is
   exactly the thing a stranger must not be handed.
-* The payload keys by the **surrogate** ``Tracker.id``, never the nickname and
-  never ``device_key``. Two trackers sharing a nickname used to collapse onto a
-  single map feature, and the credential must not travel in a payload that gets
-  pushed, logged and dumped on a page.
+* The payload keys by the **surrogate** ``Tracker.id`` plus the producer's
+  ``vehicle_id``, never the nickname and never ``device_key``. Two trackers
+  sharing a nickname used to collapse onto a single map feature, and the
+  credential must not travel in a payload that gets pushed, logged and dumped
+  on a page.
 * Ingest **publishes what the endpoint would have returned**. The two are built
   by one function, and a client stores both the same way, so a divergence would
   make a map that disagrees with itself depending on how it was populated.
@@ -66,6 +67,12 @@ class FakeRedis:
 
     async def mget(self, keys: list[str]) -> list[bytes | None]:
         return [self.data.get(k) for k in keys]
+
+    async def get(self, key: str) -> bytes | None:
+        return self.data.get(key)
+
+    async def exists(self, key: str) -> int:
+        return int(key in self.data)
 
     async def setex(self, key: str, ttl: int, value: str) -> None:
         self.data[key] = value.encode()
@@ -217,7 +224,7 @@ class TestTrackerPositions:
         self, make_admin_client: ClientFactory, world: dict
     ) -> None:
         client = await make_admin_client(
-            FakeRedis({"vehicle:gently-tender-oyster:T1": record()})
+            FakeRedis({"vehicle:gently-tender-oyster": record()})
         )
 
         response = await client.get(
@@ -226,7 +233,7 @@ class TestTrackerPositions:
 
         assert response.status_code == 200
         (vehicle,) = response.json()
-        assert vehicle["key"] == "gently-tender-oyster:T1"
+        assert vehicle["key"] == "gently-tender-oyster"
         assert vehicle["trackerId"] == "gently-tender-oyster"
         assert vehicle["tripId"] == "T1"
         assert vehicle["lat"] == 42.0
@@ -239,7 +246,7 @@ class TestTrackerPositions:
         self, make_admin_client: ClientFactory, world: dict
     ) -> None:
         client = await make_admin_client(
-            FakeRedis({"vehicle:gently-tender-oyster:T1": record()})
+            FakeRedis({"vehicle:gently-tender-oyster": record()})
         )
 
         response = await client.get(
@@ -263,8 +270,8 @@ class TestTrackerPositions:
         client = await make_admin_client(
             FakeRedis(
                 {
-                    "vehicle:gently-tender-oyster:T1": record(),
-                    "vehicle:oddly-swift-marten:T9": record(
+                    "vehicle:gently-tender-oyster": record(),
+                    "vehicle:oddly-swift-marten": record(
                         tracker_id="oddly-swift-marten", trip_id="T9"
                     ),
                 }
@@ -281,7 +288,7 @@ class TestTrackerPositions:
         self, make_admin_client: ClientFactory, world: dict
     ) -> None:
         client = await make_admin_client(
-            FakeRedis({"vehicle:gently-tender-oyster:T1": record()})
+            FakeRedis({"vehicle:gently-tender-oyster": record()})
         )
 
         response = await client.get(
@@ -290,10 +297,10 @@ class TestTrackerPositions:
 
         assert "lively-happy-otter" not in response.text
 
-    async def test_concurrent_trips_on_one_tracker_stay_distinct(
+    async def test_concurrent_vehicles_on_one_tracker_stay_distinct(
         self, make_admin_client: ClientFactory, world: dict
     ) -> None:
-        """One credential, several vehicles: the trip instance is what parts them.
+        """One credential, several vehicles: the ``vehicle_id`` is what parts them.
 
         A key that were the tracker alone would collapse these onto one map
         feature, which the panel would then report as a single vehicle.
@@ -301,11 +308,11 @@ class TestTrackerPositions:
         client = await make_admin_client(
             FakeRedis(
                 {
-                    "vehicle:gently-tender-oyster:T1:20260101": record(
-                        start_date="20260101"
+                    "vehicle:gently-tender-oyster:449:20260101": record(
+                        vehicle_id="449:20260101", start_date="20260101"
                     ),
-                    "vehicle:gently-tender-oyster:T1:20260102": record(
-                        start_date="20260102"
+                    "vehicle:gently-tender-oyster:449:20260102": record(
+                        vehicle_id="449:20260102", start_date="20260102"
                     ),
                 }
             )
@@ -316,10 +323,13 @@ class TestTrackerPositions:
         )
 
         vehicles = response.json()
+        # A vehicle_id carrying its own colons survives the round trip, which is
+        # what splitting on the first colon only is for.
         assert [v["key"] for v in vehicles] == [
-            "gently-tender-oyster:T1:20260101",
-            "gently-tender-oyster:T1:20260102",
+            "gently-tender-oyster:449:20260101",
+            "gently-tender-oyster:449:20260102",
         ]
+        assert [v["trackerId"] for v in vehicles] == ["gently-tender-oyster"] * 2
         assert len({v["vehicleId"] for v in vehicles}) == 2
 
 
@@ -347,7 +357,7 @@ class TestPositionPublish:
         assert channel == feed_channel(world["feed"].id)
         event = json.loads(payload)
         assert event["type"] == "position"
-        assert event["vehicle"]["key"] == "gently-tender-oyster:T1"
+        assert event["vehicle"]["key"] == "gently-tender-oyster"
         assert event["vehicle"]["trackerId"] == "gently-tender-oyster"
         assert event["vehicle"]["label"] == "Otter"
 
@@ -407,7 +417,7 @@ class TestPositionPublish:
         )
 
         assert response.status_code == 200
-        assert "vehicle:nobody-at-all:T1" in redis.data
+        assert "vehicle:nobody-at-all" in redis.data
         assert redis.published == []
 
     async def test_a_device_key_lands_in_the_surrogate_id_namespace(
@@ -415,9 +425,9 @@ class TestPositionPublish:
     ) -> None:
         """A producer configured with the readable device_key still works.
 
-        The serving side only ever scans `vehicle:{Tracker.id}:*`, so a device_key
-        that was stored verbatim would be written where nothing reads it. This is
-        the shape that broke hell-gate-bridge for five weeks.
+        The serving side only ever reads the `vehicle:{Tracker.id}` namespace, so
+        a device_key that was stored verbatim would be written where nothing
+        reads it. This is the shape that broke hell-gate-bridge for five weeks.
         """
         redis = FakeRedis()
         client = await make_public_client(redis)
@@ -435,11 +445,11 @@ class TestPositionPublish:
         )
 
         assert response.status_code == 200
-        assert "vehicle:gently-tender-oyster:T1" in redis.data
-        assert f"vehicle:{world['reporting'].device_key}:T1" not in redis.data
+        assert "vehicle:gently-tender-oyster" in redis.data
+        assert f"vehicle:{world['reporting'].device_key}" not in redis.data
         # The stored record carries the surrogate id too, not what was sent.
         assert (
-            json.loads(redis.data["vehicle:gently-tender-oyster:T1"])["tracker_id"]
+            json.loads(redis.data["vehicle:gently-tender-oyster"])["tracker_id"]
             == "gently-tender-oyster"
         )
         # Resolved, so it publishes like any known tracker.
@@ -469,3 +479,92 @@ class TestPositionPublish:
             )
 
         assert "nobody-at-all" in caplog.text
+
+    async def test_a_vehicle_that_changes_trip_keeps_one_record(
+        self, make_public_client: ClientFactory, world: dict
+    ) -> None:
+        """The regression the per-vehicle re-key exists for.
+
+        A bus finishing loop 1 and starting loop 2 used to write a key under the
+        new trip while the old one lived out its 60s TTL, so the feed carried two
+        entities sharing one `vehicle.id`. Keyed on the vehicle, the second fix
+        lands on the first one's key.
+        """
+        redis = FakeRedis()
+        client = await make_public_client(redis)
+
+        for trip_id in ("loop-1", "loop-2"):
+            await client.post(
+                "/ingest/position",
+                headers={"Authorization": f"Bearer {INGEST_TOKEN}"},
+                json={
+                    "tracker_id": "gently-tender-oyster",
+                    "vehicle_id": "bus-42",
+                    "trip_id": trip_id,
+                    "lat": 42.0,
+                    "lon": -71.0,
+                    "timestamp": 1_700_000_000,
+                },
+            )
+
+        assert list(redis.data) == ["vehicle:gently-tender-oyster:bus-42"]
+        stored = json.loads(redis.data["vehicle:gently-tender-oyster:bus-42"])
+        assert stored["trip_id"] == "loop-2"
+
+    async def test_a_fleet_sharing_a_bare_key_is_logged(
+        self,
+        make_public_client: ClientFactory,
+        world: dict,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """An absent vehicle_id is fine for one device and wrong for a fleet.
+
+        A single Traccar device legitimately holds the bare tracker key. Two
+        vehicles reporting different trips into it are overwriting each other,
+        which is only visible here, at the write.
+        """
+        redis = FakeRedis()
+        client = await make_public_client(redis)
+
+        with caplog.at_level(logging.WARNING, logger="cafe_car.routers.ingest"):
+            for trip_id in ("T1", "T2"):
+                await client.post(
+                    "/ingest/position",
+                    headers={"Authorization": f"Bearer {INGEST_TOKEN}"},
+                    json={
+                        "tracker_id": "gently-tender-oyster",
+                        "trip_id": trip_id,
+                        "lat": 42.0,
+                        "lon": -71.0,
+                        "timestamp": 1_700_000_000,
+                    },
+                )
+
+        assert list(redis.data) == ["vehicle:gently-tender-oyster"]
+        assert "vehicle_id" in caplog.text
+
+    async def test_one_device_repeating_its_trip_is_not_logged(
+        self,
+        make_public_client: ClientFactory,
+        world: dict,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The ordinary Traccar case: same vehicle, same trip, fix after fix."""
+        redis = FakeRedis()
+        client = await make_public_client(redis)
+
+        with caplog.at_level(logging.WARNING, logger="cafe_car.routers.ingest"):
+            for _ in range(2):
+                await client.post(
+                    "/ingest/position",
+                    headers={"Authorization": f"Bearer {INGEST_TOKEN}"},
+                    json={
+                        "tracker_id": "gently-tender-oyster",
+                        "trip_id": "T1",
+                        "lat": 42.0,
+                        "lon": -71.0,
+                        "timestamp": 1_700_000_000,
+                    },
+                )
+
+        assert caplog.text == ""

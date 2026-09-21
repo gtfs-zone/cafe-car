@@ -78,11 +78,12 @@ class PositionIngest(BaseModel):
     # `vehicle:{Tracker.id}:*` namespace cafe-car scans. Not a credential:
     # `/ingest/*` is authenticated by the shared token in `_check_auth`.
     tracker_id: str
-    # Public per-vehicle identity. One tracker credential can fan out to many
-    # concurrent vehicles (e.g. Amtrak's ~53 trains under one credential), so the
-    # producer, which knows the real vehicle, supplies its GTFS
-    # VehicleDescriptor.id/label here. Absent for single-device producers, which
-    # fall back to the tracker nickname at serialisation.
+    # Public per-vehicle identity, and half of the Redis key. One tracker
+    # credential can fan out to many concurrent vehicles (e.g. Amtrak's ~53
+    # trains under one credential), so the producer, which knows the real
+    # vehicle, supplies its GTFS VehicleDescriptor.id/label here. Absent for
+    # single-device producers, which hold one bare-tracker_id record and fall
+    # back to the tracker nickname at serialisation.
     vehicle_id: str | None = None
     vehicle_label: str | None = None
     trip_id: str
@@ -194,6 +195,35 @@ def _trip_update_key(trip_id: str, start_date: str | None) -> str:
     return f"trip_update:{trip_id}"
 
 
+async def _warn_on_shared_bare_key(
+    redis: object, key: str, tracker_id: str, trip_id: str
+) -> None:
+    """Warn when a tracker with no ``vehicle_id`` is carrying several vehicles.
+
+    A Traccar device legitimately has no ``vehicle_id``: one tracker, one
+    vehicle, one bare key. A multi-vehicle producer that omits it collapses its
+    whole fleet onto that single record, each fix overwriting the last. A live
+    record under this key reporting a different trip is the tell.
+    """
+    raw = await redis.get(key)
+    if raw is None:
+        return
+    try:
+        live_trip = json.loads(raw).get("trip_id")
+    except (TypeError, ValueError):
+        return
+    if live_trip and live_trip != trip_id:
+        log.warning(
+            "Position with no vehicle_id for tracker_id=%r overwrote a live "
+            "record on trip %r with one on trip %r; a producer running several "
+            "vehicles under one tracker must send vehicle_id or they share %s",
+            tracker_id,
+            live_trip,
+            trip_id,
+            key,
+        )
+
+
 def _check_auth(authorization: str | None) -> None:
     token = get_settings().ingest_api_token
     if not token:
@@ -250,7 +280,12 @@ async def ingest_position(
         record["current_status"] = body.current_status
 
     redis = request.app.state.redis
-    key = redis_key(tracker_id, body.trip_id, body.start_date)
+    # Keyed on the vehicle, never on the trip: the next fix from this vehicle
+    # overwrites this record whatever trip it has moved on to, so a vehicle
+    # that changes trip cannot appear twice in one feed.
+    key = redis_key(tracker_id, body.vehicle_id)
+    if body.vehicle_id is None:
+        await _warn_on_shared_bare_key(redis, key, tracker_id, body.trip_id)
     await redis.setex(key, POSITION_TTL, json.dumps(record))
 
     # Push the fix to whoever is watching this feed's channel. The tracker is

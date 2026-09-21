@@ -3,9 +3,18 @@
 Three readers share this module and none of them may re-derive what is here.
 ``routers/ingest.py`` writes the records and publishes each one as it lands,
 ``api/positions.py`` reads the whole feed's worth on demand, and
-``routers/catalog.py`` walks the keyspace to answer "is anything live". A key
-derivation duplicated across those is the failure the surrogate re-key was
-supposed to end.
+``routers/catalog.py`` walks the keyspace to answer "is anything live". The key
+derivation itself lives one level down, in ``railroad_club.vehicle_keys``, and
+is re-exported here: the producers derive the same strings, and two repos
+deriving them independently is how ``vehicle:*`` came to mean a device in one
+writer and a trip instance in another.
+
+**A vehicle's identity is ``(tracker_id, vehicle_id)``.** ``trip_id`` and
+``start_date`` are data on the record, not part of the key, so a vehicle that
+finishes one trip and starts another overwrites its own record instead of
+leaving the old one to live out its TTL beside the new one. A producer with no
+per-vehicle id - a Traccar device is one tracker, one vehicle - holds the bare
+tracker id and so exactly one record.
 
 **The view is GTFS-RT camelCase because yard-master's map reads GTFS-RT.** It
 is exactly the `VehiclePosition` shape `map-controller.ts` holds, so a payload
@@ -16,9 +25,8 @@ disagree, which is why one function builds both.
 **``key`` is the surrogate, never the nickname.** It is the map feature id, the
 key in `FeedSession.vehicles` and the click identity, and nicknames are only
 unique within a feed while two trackers sharing one used to collapse onto a
-single map feature. One tracker can also carry several concurrent vehicles (one
-Redis key per trip instance), so the key carries the trip discriminator too and
-``trackerId`` is what says which tracker they all belong to.
+single map feature. It is also the real Redis key for every producer, which is
+what lets a view and a record be matched up.
 
 ``device_key`` appears nowhere in here. A record never held it and a view never
 may: these payloads are logged, pushed down a channel and dumped on a page.
@@ -29,57 +37,37 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from railroad_club.vehicle_keys import redis_key, split_vehicle_key, vehicle_key
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from redis.asyncio import Redis
+
+__all__ = [
+    "feed_vehicles",
+    "live_vehicle_keys",
+    "public_vehicle_id",
+    "redis_key",
+    "split_vehicle_key",
+    "vehicle_key",
+    "vehicle_view",
+]
 
 # SCAN's per-call hint. Larger than the default 10 because the vehicle keyspace
 # is small and one round trip per ten keys is the slow part.
 SCAN_COUNT = 500
 
 
-def vehicle_key(tracker_id: str, trip_id: str, start_date: str | None) -> str:
-    """The identity of one vehicle: a tracker, plus which trip instance it is.
-
-    Appending ``start_date`` when present gives concurrent instances of one
-    long-running daily trip distinct keys. This is the Redis key without its
-    ``vehicle:`` prefix, so the same string addresses a record and a map
-    feature.
-    """
-    slug = f"{trip_id}:{start_date}" if start_date else trip_id
-    return f"{tracker_id}:{slug}"
-
-
-def redis_key(tracker_id: str, trip_id: str, start_date: str | None) -> str:
-    """Where one vehicle's record lives."""
-    return f"vehicle:{vehicle_key(tracker_id, trip_id, start_date)}"
-
-
-def public_vehicle_id(
-    tracker_nickname: str,
-    public_id: str | None,
-    trip_id: str | None,
-    start_date: str | None,
-) -> str:
+def public_vehicle_id(tracker_nickname: str, public_id: str | None) -> str:
     """The GTFS-RT `VehicleDescriptor.id` for one vehicle record.
 
-    A producer's own `vehicle_id` is trusted when given, but a producer with no
-    concept of a public per-vehicle id (or one that forgets to set it, which bit
-    a buswhere feed that ran several devices under one tracker credential) must
-    not collapse every such vehicle onto the bare tracker nickname: GTFS-RT
-    requires this id "unique per vehicle", and two concurrent vehicles sharing a
-    tracker would otherwise share this id too. Folding in the trip instance
-    (trip_id + start_date, the same disambiguator used for `entity.id`) restores
-    uniqueness for any concurrently-running vehicles, without requiring every
-    producer to invent its own scheme.
+    A producer's own `vehicle_id` is trusted when given; a producer with no
+    concept of one runs a single vehicle under its tracker, so the nickname is
+    unique per vehicle for it. This is the same pairing the Redis key is built
+    from, so two records that share this id would have shared a key.
     """
-    if public_id:
-        return public_id
-    if trip_id:
-        instance = f"{trip_id}:{start_date}" if start_date else trip_id
-        return f"{tracker_nickname}:{instance}"
-    return tracker_nickname
+    return public_id or tracker_nickname
 
 
 def _decode(raw: bytes | str) -> str:
@@ -97,11 +85,10 @@ async def live_vehicle_keys(redis: Redis) -> dict[str, list[str]]:
     by_tracker: dict[str, list[str]] = {}
     async for raw in redis.scan_iter(match="vehicle:*", count=SCAN_COUNT):
         key = _decode(raw)
-        # vehicle:{tracker_id}:{trip_id}[:{start_date}]
-        parts = key.split(":")
-        if len(parts) < 3:
+        tracker_id, _ = split_vehicle_key(key)
+        if not tracker_id:
             continue
-        by_tracker.setdefault(parts[1], []).append(key)
+        by_tracker.setdefault(tracker_id, []).append(key)
     return by_tracker
 
 
@@ -120,10 +107,10 @@ def vehicle_view(
     public_id = record.get("vehicle_id")
     # What a consumer of the published feed sees for this vehicle, derived the
     # same way the `.pb` derives it, so the panel and the feed never disagree.
-    vehicle_id = public_vehicle_id(nickname, public_id, trip_id, start_date)
+    vehicle_id = public_vehicle_id(nickname, public_id)
 
     view: dict[str, Any] = {
-        "key": vehicle_key(tracker_id, record.get("trip_id") or "", start_date),
+        "key": vehicle_key(tracker_id, public_id),
         "trackerId": tracker_id,
         "vehicleId": vehicle_id,
         "entityId": vehicle_id,
@@ -184,7 +171,7 @@ async def feed_vehicles(
             # Expired between the scan and the read; its 60s TTL is what makes
             # presence mean freshness, so a gone key is simply not live.
             continue
-        tracker_id = key.split(":")[1]
+        tracker_id, _ = split_vehicle_key(key)
         views.append(vehicle_view(tracker_id, names[tracker_id], json.loads(raw)))
     views.sort(key=lambda v: v["key"])
     return views

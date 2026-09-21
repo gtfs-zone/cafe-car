@@ -1,8 +1,10 @@
 """GTFS-RT protobuf endpoints, over ASGI.
 
 Focused on `VehicleDescriptor.id` uniqueness: a producer that runs several
-concurrent vehicles under one tracker credential but supplies no per-vehicle
-`vehicle_id` must not have them collapse onto the bare tracker nickname.
+concurrent vehicles under one tracker credential identifies each with its own
+`vehicle_id`, which is also what the record is keyed on, so two entities in one
+message cannot share an id. A single-device producer sends no `vehicle_id`, has
+one record under the bare tracker key, and is labelled with the nickname.
 """
 
 from __future__ import annotations
@@ -104,9 +106,10 @@ def _parse_vehicles(content: bytes) -> gtfs_realtime_pb2.FeedMessage:
 async def test_two_concurrent_vehicles_under_one_tracker_get_distinct_ids(
     make_client: ClientFactory, session: AsyncSession
 ) -> None:
-    """The exact buswhere bug: one tracker, two live devices, neither carrying
-    a producer-supplied `vehicle_id`; the feed must still not reuse a
-    VehicleDescriptor.id across them."""
+    """The exact buswhere bug: one tracker, two live devices on two trips.
+
+    Each is keyed on its own `vehicle_id`, so the ids the feed publishes are
+    the keys the records live under and cannot collide."""
     owner = await make_user(session)
     feed = await make_feed(session, owner, "cc-feed")
     session.add(
@@ -117,11 +120,11 @@ async def test_two_concurrent_vehicles_under_one_tracker_get_distinct_ids(
     client = await make_client(
         FakeRedis(
             {
-                "vehicle:ccbus:shopping-trip:20260803": vehicle_record(
-                    "shopping-trip", "20260803"
+                "vehicle:ccbus:bus-1": vehicle_record(
+                    "shopping-trip", "20260803", vehicle_id="bus-1"
                 ),
-                "vehicle:ccbus:HUD_ALB_B_PM_NB:20260803": vehicle_record(
-                    "HUD_ALB_B_PM_NB", "20260803"
+                "vehicle:ccbus:bus-2": vehicle_record(
+                    "HUD_ALB_B_PM_NB", "20260803", vehicle_id="bus-2"
                 ),
             }
         )
@@ -133,10 +136,7 @@ async def test_two_concurrent_vehicles_under_one_tracker_get_distinct_ids(
     ids = [e.vehicle.vehicle.id for e in msg.entity]
     assert len(ids) == 2
     assert len(set(ids)) == 2, f"vehicle.id collided: {ids}"
-    assert set(ids) == {
-        "CC Bus:shopping-trip:20260803",
-        "CC Bus:HUD_ALB_B_PM_NB:20260803",
-    }
+    assert set(ids) == {"bus-1", "bus-2"}
 
 
 async def test_a_producer_supplied_vehicle_id_is_still_honored(
@@ -154,7 +154,7 @@ async def test_a_producer_supplied_vehicle_id_is_still_honored(
     client = await make_client(
         FakeRedis(
             {
-                "vehicle:amtrak:trip-1:20260803": vehicle_record(
+                "vehicle:amtrak:53:20260803": vehicle_record(
                     "trip-1", "20260803", vehicle_id="53:20260803"
                 ),
             }
@@ -182,17 +182,25 @@ async def test_trip_update_vehicle_id_is_also_deduplicated(
     client = await make_client(
         FakeRedis(
             {
-                "vehicle:ccbus2:shopping-trip:20260803": vehicle_record(
-                    "shopping-trip", "20260803"
+                "vehicle:ccbus2:bus-1": vehicle_record(
+                    "shopping-trip", "20260803", vehicle_id="bus-1"
                 ),
-                "vehicle:ccbus2:HUD_ALB_B_PM_NB:20260803": vehicle_record(
-                    "HUD_ALB_B_PM_NB", "20260803"
+                "vehicle:ccbus2:bus-2": vehicle_record(
+                    "HUD_ALB_B_PM_NB", "20260803", vehicle_id="bus-2"
                 ),
                 "trip_update:shopping-trip:20260803": json.dumps(
-                    {"trip_id": "shopping-trip", "timestamp": 0}
+                    {
+                        "trip_id": "shopping-trip",
+                        "timestamp": 0,
+                        "vehicle_id": "bus-1",
+                    }
                 ).encode(),
                 "trip_update:HUD_ALB_B_PM_NB:20260803": json.dumps(
-                    {"trip_id": "HUD_ALB_B_PM_NB", "timestamp": 0}
+                    {
+                        "trip_id": "HUD_ALB_B_PM_NB",
+                        "timestamp": 0,
+                        "vehicle_id": "bus-2",
+                    }
                 ).encode(),
             }
         )
@@ -204,3 +212,29 @@ async def test_trip_update_vehicle_id_is_also_deduplicated(
     ids = [e.trip_update.vehicle.id for e in msg.entity]
     assert len(ids) == 2
     assert len(set(ids)) == 2, f"vehicle.id collided: {ids}"
+
+
+async def test_a_single_device_tracker_is_served_from_its_bare_key(
+    make_client: ClientFactory, session: AsyncSession
+) -> None:
+    """A Traccar device sends no `vehicle_id`, so its record is `vehicle:{id}`.
+
+    That key does not match the `vehicle:{id}:*` wildcard, which is why the
+    builders ask for it by name.
+    """
+    owner = await make_user(session)
+    feed = await make_feed(session, owner, "traccar-feed")
+    session.add(
+        Tracker(id="otter", device_key="otter-key", nickname="Otter", feed_id=feed.id)
+    )
+    await session.commit()
+
+    client = await make_client(
+        FakeRedis({"vehicle:otter": vehicle_record("trip-1", "20260803")})
+    )
+    response = await client.get("/traccar-feed/vehicle_positions.pb")
+
+    msg = _parse_vehicles(response.content)
+    (entity,) = msg.entity
+    assert entity.vehicle.vehicle.id == "Otter"
+    assert entity.vehicle.trip.trip_id == "trip-1"
