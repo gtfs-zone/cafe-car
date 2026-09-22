@@ -21,10 +21,10 @@ Traccar Client app (phone) / GPS unit
             └─> vehicle-poser (HTTP forward)  → Redis DB 1 (vehicle:{tracker_id}:* keys)
 
 hell-gate-bridge (Amtrak, Columbia County)
-    └─> POST /ingest/position, /ingest/trip-update  → Redis DB 1
+    └─> POST /ingest/positions, /ingest/trip-updates (batch)  → Redis DB 1
 
 trip-updogger
-    └─> sweeps vehicle:* + scheduled stop_times → Redis DB 1 (trip_update:{trip_id} keys)
+    └─> sweeps vehicle:* + scheduled stop_times → Redis DB 1 (trip_update:{tracker_id}:{trip_id} keys)
 ```
 
 There is no MQTT broker and no OwnTracks path any more: positions arrive over HTTP, either through [vehicle-poser](https://git.kcfam.us/gtfs.zone/vehicle-poser) (Traccar's forwarder) or directly on this service's `/ingest` API. Trip delays are written by [trip-updogger](https://git.kcfam.us/gtfs.zone/trip-updogger) and by upstream pollers.
@@ -33,9 +33,9 @@ There is no MQTT broker and no OwnTracks path any more: positions arrive over HT
 
 ## Trackers, not drivers
 
-A `Tracker` is one vehicle's credential. Its `id` is a secret pet-name (e.g. `gently-tender-oyster`) that doubles as the Traccar `uniqueId`, the Redis key namespace, and the `tracker_id` a producer posts under. There is no password. Creating a tracker in yard-master auto-creates the matching Traccar device and renders a provisioning QR for the Traccar Client app.
+A `Tracker` is one producer's credential. Its `id` is a uuid4 hex surrogate: the Redis key namespace and the `tracker_id` a producer posts under. Its `device_key` is a secret pet-name (e.g. `gently-tender-oyster`) that doubles as the Traccar `uniqueId`; there is no password. Creating a tracker in yard-master auto-creates the matching Traccar device and renders a provisioning QR for the Traccar Client app.
 
-The `id` is never emitted in a feed. Vehicles are labelled with the tracker's public `nickname` instead.
+Neither id is emitted in a feed. A vehicle is labelled with the producer's `vehicle_id`, falling back to the tracker's public `nickname`.
 
 A `TrackerRule` binds a tracker to a `trip_id` on a day-of-week and time window, which is how vehicle-poser resolves an incoming position to a trip server-side.
 

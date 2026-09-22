@@ -55,7 +55,7 @@ A new credential whose *verified* email already belongs to another user never me
 
 The public GTFS-RT endpoints (`rt.gtfs.zone`) have **no authentication middleware**; they are publicly accessible.
 
-`Tracker` records have a secret pet-name `id` (e.g. `gently-tender-oyster`) that serves as the Traccar `uniqueId` / QR provisioning credential. There is **no password**. The `id` is a secret and is never exposed in a public GTFS-RT feed; feeds show the tracker's public `nickname` instead.
+A `Tracker` has two ids. `id` is a uuid4 hex surrogate, the primary key and the Redis key namespace; it is not a secret. `device_key` is the secret pet-name (e.g. `gently-tender-oyster`) that serves as the Traccar `uniqueId` / QR provisioning credential, and there is **no password** behind it. Neither is exposed in a public GTFS-RT feed: feeds label a vehicle with the producer's `vehicle_id`, falling back to the tracker's public `nickname`.
 
 ## Redis DB Allocation
 
@@ -109,9 +109,9 @@ session cookie, which may belong to whoever used the browser last.
 
 ## Redis Data Format
 
-Vehicle positions are stored at key `vehicle:{tracker.id}:{slug}`, one key per concurrent vehicle under that tracker, and read back with a `vehicle:{tracker.id}:*` scan. The slug is `{trip_id}` or `{trip_id}:{start_date}`, which is what keeps concurrent instances of one long-running daily trip apart. Each value is JSON with fields: `tracker_id`, `lat`, `lon`, `bearing`, `speed`, `trip_id`, `timestamp`, plus optional `route_id`, `start_date`, `vehicle_id`, `vehicle_label`, `current_stop_sequence`, `stop_id` and `current_status`; the serialiser reads every optional one with `.get()`, so a producer that predates a key just omits it. The `tracker_id` is the secret credential and is only a Redis-internal identifier; feeds label vehicles by the producer's public `vehicle_id`, falling back to the tracker's `nickname` from the DB.
+Vehicle positions are stored at key `vehicle:{tracker.id}:{vehicle_id}`, one key per real-world vehicle under that tracker. A producer with no per-vehicle id - a Traccar device is one tracker, one vehicle - holds the bare key `vehicle:{tracker.id}` and so exactly one record. **A vehicle's identity is `(tracker_id, vehicle_id)`**: `trip_id` and `start_date` are data on the record, never part of the key, so a vehicle that finishes one trip and starts another overwrites its own record instead of leaving the old one to live out its TTL beside the new one. Each value is JSON with fields: `tracker_id`, `lat`, `lon`, `bearing`, `speed`, `trip_id`, `timestamp`, plus optional `route_id`, `start_date`, `vehicle_id`, `vehicle_label`, `current_stop_sequence`, `stop_id` and `current_status`; the serialiser reads every optional one with `.get()`, so a producer that predates a key just omits it. Key derivation lives in `railroad_club.vehicle_keys` and is re-exported by `vehicle_payload.py`; a tracker id never contains `:`, which is what lets `split_vehicle_key` hand back a `vehicle_id` that does, such as Amtrak's `449:20260921`.
 
-Trip updates are stored at `trip_update:{trip_id}` or `trip_update:{trip_id}:{start_date}`. Positions carry a 60s TTL, trip updates 300s: a prediction stays valid for longer than the fix that produced it.
+Trip updates are stored at `trip_update:{tracker.id}:{trip_id}` or `trip_update:{tracker.id}:{trip_id}:{start_date}`. The keyspace is scoped by tracker so two feeds whose GTFS share a `trip_id` string do not overwrite each other's predictions. Positions carry a 60s TTL, trip updates 300s: a prediction stays valid for longer than the fix that produced it.
 
 ## Migrations
 

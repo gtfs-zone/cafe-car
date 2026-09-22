@@ -31,12 +31,27 @@ if TYPE_CHECKING:
 
 class FakeRedis(_CatalogFakeRedis):
     """Adds the single-key ``get`` the gtfs_rt router calls (catalog.py only
-    ever needs ``mget``/``scan_iter``/``exists``)."""
+    ever needs ``mget``/``scan_iter``/``exists``), and the ``setex`` the ingest
+    route writes through, so a test can feed this app its own records.
+
+    No TTL is kept: a key written here lives until it is overwritten.
+    """
 
     async def get(self, key: str | bytes) -> bytes | None:
         if isinstance(key, bytes):
             key = key.decode()
         return self.data.get(key)
+
+    async def setex(self, key: str | bytes, _ttl: int, value: str | bytes) -> None:
+        if isinstance(key, bytes):
+            key = key.decode()
+        if isinstance(value, str):
+            value = value.encode()
+        self.data[key] = value
+
+    async def publish(self, _channel: str, _payload: str) -> None:
+        """Ingest announces each record on the feed channel; nothing here
+        listens, and the published view has its own tests."""
 
 
 def vehicle_record(
@@ -238,3 +253,50 @@ async def test_a_single_device_tracker_is_served_from_its_bare_key(
     (entity,) = msg.entity
     assert entity.vehicle.vehicle.id == "Otter"
     assert entity.vehicle.trip.trip_id == "trip-1"
+
+
+async def test_a_vehicle_that_changes_trip_yields_one_entity(
+    make_client: ClientFactory,
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Symptom 1, at the published feed.
+
+    A bus finishing loop 1 and starting loop 2 used to write a key under the new
+    trip while the old one lived out its 60s TTL, so the message carried two
+    entities sharing one `vehicle.id`. Keyed on the vehicle, the second fix
+    overwrites the first and the feed carries one entity, on the current trip.
+    """
+    monkeypatch.setenv("INGEST_API_TOKEN", "ingest-token")
+
+    owner = await make_user(session)
+    feed = await make_feed(session, owner, "cc-feed")
+    session.add(
+        Tracker(id="ccbus", device_key="ccbus-key", nickname="CC Bus", feed_id=feed.id)
+    )
+    await session.commit()
+
+    client = await make_client(FakeRedis())
+
+    for trip_id in ("loop-1", "loop-2"):
+        ingested = await client.post(
+            "/ingest/position",
+            headers={"Authorization": "Bearer ingest-token"},
+            json={
+                "tracker_id": "ccbus",
+                "vehicle_id": "bus-42",
+                "trip_id": trip_id,
+                "lat": 42.0,
+                "lon": -71.0,
+                "timestamp": 1_700_000_000,
+            },
+        )
+        assert ingested.status_code == 200, ingested.text
+
+    response = await client.get("/cc-feed/vehicle_positions.pb")
+    assert response.status_code == 200
+
+    msg = _parse_vehicles(response.content)
+    assert len(msg.entity) == 1
+    assert msg.entity[0].vehicle.vehicle.id == "bus-42"
+    assert msg.entity[0].vehicle.trip.trip_id == "loop-2"
