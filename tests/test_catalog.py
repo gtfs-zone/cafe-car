@@ -154,7 +154,7 @@ async def test_trip_updates_are_found_through_the_live_vehicle(
                 "vehicle:boldly-sleepy-crane:trip-1:20250103": vehicle(
                     "trip-1", "20250103"
                 ),
-                "trip_update:trip-1:20250103": b"{}",
+                "trip_update:boldly-sleepy-crane:trip-1:20250103": b"{}",
             }
         )
     )

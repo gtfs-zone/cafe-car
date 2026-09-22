@@ -568,3 +568,66 @@ class TestPositionPublish:
                 )
 
         assert caplog.text == ""
+
+
+class TestTripUpdateIngest:
+    """``/ingest/trip-update``, whose keyspace is scoped by tracker.
+
+    A ``trip_id`` is only unique inside one feed's GTFS, so two feeds both
+    numbering a trip ``"1"`` used to overwrite each other's predictions.
+    """
+
+    @staticmethod
+    async def _post(client: AsyncClient, tracker_id: str, trip_id: str) -> None:
+        response = await client.post(
+            "/ingest/trip-update",
+            headers={"Authorization": f"Bearer {INGEST_TOKEN}"},
+            json={
+                "tracker_id": tracker_id,
+                "trip_id": trip_id,
+                "timestamp": 1_700_000_000,
+                "start_date": "20260803",
+                "stop_time_updates": [
+                    {"stop_sequence": 1, "arrival_delay": 60},
+                ],
+            },
+        )
+        assert response.status_code == 200
+
+    async def test_the_key_is_scoped_by_the_tracker(
+        self, make_public_client: ClientFactory, world: dict
+    ) -> None:
+        redis = FakeRedis()
+        client = await make_public_client(redis)
+
+        await self._post(client, "gently-tender-oyster", "T1")
+
+        assert list(redis.data) == ["trip_update:gently-tender-oyster:T1:20260803"]
+
+    async def test_two_trackers_sharing_a_trip_id_do_not_collide(
+        self, make_public_client: ClientFactory, world: dict
+    ) -> None:
+        """The bug this scoping exists for: one feed's "1" is not another's."""
+        redis = FakeRedis()
+        client = await make_public_client(redis)
+
+        await self._post(client, "gently-tender-oyster", "1")
+        await self._post(client, "quietly-sleepy-heron", "1")
+
+        assert sorted(redis.data) == [
+            "trip_update:gently-tender-oyster:1:20260803",
+            "trip_update:quietly-sleepy-heron:1:20260803",
+        ]
+
+    async def test_a_device_key_lands_in_the_surrogate_id_namespace(
+        self, make_public_client: ClientFactory, world: dict
+    ) -> None:
+        """Same normalisation the position path does, so a reader finds it."""
+        redis = FakeRedis()
+        client = await make_public_client(redis)
+
+        await self._post(client, world["reporting"].device_key, "T1")
+
+        assert list(redis.data) == ["trip_update:gently-tender-oyster:T1:20260803"]
+        stored = json.loads(redis.data["trip_update:gently-tender-oyster:T1:20260803"])
+        assert stored["tracker_id"] == "gently-tender-oyster"

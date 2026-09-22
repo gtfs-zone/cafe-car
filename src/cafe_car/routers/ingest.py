@@ -21,6 +21,7 @@ from railroad_club.feed_events import feed_channel, position_event
 from railroad_club.models.informed_entity import InformedEntity
 from railroad_club.models.service_alert import ServiceAlert
 from railroad_club.models.tracker import Tracker
+from railroad_club.vehicle_keys import trip_update_key
 from sqlmodel import delete, select
 
 # Runtime imports, not type-checking ones: pydantic resolves these annotations
@@ -189,12 +190,6 @@ class AlertsSyncIngest(BaseModel):
     alerts: list[AlertIngest]
 
 
-def _trip_update_key(trip_id: str, start_date: str | None) -> str:
-    if start_date:
-        return f"trip_update:{trip_id}:{start_date}"
-    return f"trip_update:{trip_id}"
-
-
 async def _warn_on_shared_bare_key(
     redis: object, key: str, tracker_id: str, trip_id: str
 ) -> None:
@@ -318,15 +313,21 @@ async def ingest_trip_update(
     body: TripUpdateIngest,
     request: Request,
     authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> dict[str, str]:
     _check_auth(authorization)
+
+    # Same normalisation as the position path: a producer configured with a
+    # `device_key` must land in the namespace the serving side reads.
+    tracker = await _resolve_tracker(session, body.tracker_id)
+    tracker_id = tracker.id if tracker is not None else body.tracker_id
 
     # Rich, multi-stop record read by gtfs_rt.py::trip_updates. Supersedes the
     # old single-`delay` shape trip-updogger wrote; producers (Amtrak via
     # hell-gate, simulate_trip.py) now supply per-stop predictions directly.
     record = {
         "trip_id": body.trip_id,
-        "tracker_id": body.tracker_id,
+        "tracker_id": tracker_id,
         "timestamp": body.timestamp,
         "stop_time_updates": [
             stu.model_dump(exclude_none=True) for stu in body.stop_time_updates
@@ -338,11 +339,22 @@ async def ingest_trip_update(
         record["vehicle_id"] = body.vehicle_id
     if body.vehicle_label:
         record["vehicle_label"] = body.vehicle_label
-    # No tracker resolution here: the key is trip-scoped and gtfs_rt.py never
-    # reads the record's tracker_id back, so a lookup would buy nothing. The
-    # record is only ever reached via a vehicle key, which is already resolved.
-    key = _trip_update_key(body.trip_id, body.start_date)
+    # The key is tracker-scoped, so the producer's tracker_id is resolved here
+    # the same way the position path resolves it: a trip_id is only unique
+    # within one feed's GTFS, and two feeds both numbering a trip "1" would
+    # otherwise overwrite each other's predictions.
+    key = trip_update_key(tracker_id, body.trip_id, body.start_date)
     await request.app.state.redis.setex(key, TRIP_UPDATE_TTL, json.dumps(record))
+    # Stored, not rejected, for the same reason a position is: the token
+    # authorises ingest, and no feed scans a tracker the DB does not know. Logged
+    # so a stale id does not go unnoticed for weeks.
+    if tracker is None:
+        log.warning(
+            "Ingested trip update for unknown tracker_id=%r; stored at %s but no "
+            "feed will serve it",
+            body.tracker_id,
+            key,
+        )
     return {"status": "ok"}
 
 

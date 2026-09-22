@@ -188,14 +188,14 @@ async def test_trip_update_vehicle_id_is_also_deduplicated(
                 "vehicle:ccbus2:bus-2": vehicle_record(
                     "HUD_ALB_B_PM_NB", "20260803", vehicle_id="bus-2"
                 ),
-                "trip_update:shopping-trip:20260803": json.dumps(
+                "trip_update:ccbus2:shopping-trip:20260803": json.dumps(
                     {
                         "trip_id": "shopping-trip",
                         "timestamp": 0,
                         "vehicle_id": "bus-1",
                     }
                 ).encode(),
-                "trip_update:HUD_ALB_B_PM_NB:20260803": json.dumps(
+                "trip_update:ccbus2:HUD_ALB_B_PM_NB:20260803": json.dumps(
                     {
                         "trip_id": "HUD_ALB_B_PM_NB",
                         "timestamp": 0,

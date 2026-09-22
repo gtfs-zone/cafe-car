@@ -29,13 +29,14 @@ from pydantic import BaseModel
 from railroad_club.models.feed import Feed
 from railroad_club.models.service_alert import ServiceAlert
 from railroad_club.models.tracker import Tracker
+from railroad_club.vehicle_keys import trip_update_key
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
 
 from cafe_car.alerts import active_alerts
 from cafe_car.database import get_session
 from cafe_car.feed_urls import feed_rt_urls, feed_static_url
-from cafe_car.vehicle_payload import live_vehicle_keys
+from cafe_car.vehicle_payload import live_vehicle_keys, split_vehicle_key
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -47,6 +48,7 @@ router = APIRouter()
 # them costs a Redis keyspace walk. Half a poll's worth of staleness is a fair
 # trade for not doing that per page-load.
 CACHE_CONTROL = "public, max-age=30"
+
 
 class FeedCatalogEntry(BaseModel):
     """One feed, as a consumer needs to see it."""
@@ -64,24 +66,21 @@ class FeedCatalogEntry(BaseModel):
 async def _any_trip_update(redis: Redis, vehicle_keys: list[str]) -> bool:
     """Whether any live vehicle here is running a trip that has an update.
 
-    Mirrors the key derivation in ``gtfs_rt.py::trip_updates``: a >24h daily trip
-    has several instances live at once, distinguished by ``start_date``.
+    Mirrors the key derivation in ``gtfs_rt.py::trip_updates``: keys are scoped
+    by the tracker the vehicle runs under, and a >24h daily trip has several
+    instances live at once, distinguished by ``start_date``.
     """
     if not vehicle_keys:
         return False
-    for raw in await redis.mget(vehicle_keys):
+    for key, raw in zip(vehicle_keys, await redis.mget(vehicle_keys), strict=True):
         if raw is None:
             continue
         data = json.loads(raw)
         trip_id = data.get("trip_id")
         if not trip_id:
             continue
-        start_date = data.get("start_date")
-        tu_key = (
-            f"trip_update:{trip_id}:{start_date}"
-            if start_date
-            else f"trip_update:{trip_id}"
-        )
+        tracker_id, _ = split_vehicle_key(key)
+        tu_key = trip_update_key(tracker_id, trip_id, data.get("start_date"))
         if await redis.exists(tu_key):
             return True
     return False
@@ -100,9 +99,7 @@ async def list_feeds(
     feeds = (await session.exec(select(Feed))).all()
 
     trackers_by_feed: dict[int, list[str]] = defaultdict(list)
-    for tracker_id, feed_id in await session.exec(
-        select(Tracker.id, Tracker.feed_id)
-    ):
+    for tracker_id, feed_id in await session.exec(select(Tracker.id, Tracker.feed_id)):
         trackers_by_feed[feed_id].append(tracker_id)
 
     alerts_by_feed: dict[int, list[ServiceAlert]] = defaultdict(list)

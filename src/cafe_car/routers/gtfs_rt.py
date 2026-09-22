@@ -10,6 +10,7 @@ from google.transit import gtfs_realtime_pb2
 from railroad_club.models.feed import Feed
 from railroad_club.models.service_alert import ServiceAlert
 from railroad_club.models.tracker import Tracker
+from railroad_club.vehicle_keys import trip_update_key
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -82,12 +83,9 @@ async def _build_trip_updates_feed(
         if not trip_id or (trip_id, start_date) in seen:
             continue
 
-        tu_key = (
-            f"trip_update:{trip_id}:{start_date}"
-            if start_date
-            else f"trip_update:{trip_id}"
-        )
-        trip_raw = await redis.get(tu_key)
+        # Trip-update keys are tracker-scoped; the tracker comes from the
+        # vehicle record that led here, so no extra lookup.
+        trip_raw = await redis.get(trip_update_key(tracker.id, trip_id, start_date))
         if trip_raw is None:
             continue
         trip_data = json.loads(trip_raw)
