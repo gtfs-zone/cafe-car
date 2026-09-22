@@ -50,10 +50,14 @@ target-version = "py313"
 line-length = 88
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "TCH", "RUF"]
+select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "TC", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/cafe_car/__init__.py" = ["F401"]
+# Tests take fixtures by name and return nothing worth annotating.
+"tests/**" = ["ANN"]
+# One-off debug and simulation scripts, not shipped in the wheel.
+"scripts/**" = ["ANN", "E501"]
 # FastAPI resolves annotations at runtime to build dependencies and response
 # models, so a type-only import there is a NameError, not a saving. TC0xx has
 # to be off for the whole API package rather than silenced per line.

@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from railroad_club.models.user import User
     from sqlmodel.ext.asyncio.session import AsyncSession
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 class ShareResult(NamedTuple):
@@ -81,7 +81,7 @@ async def share_feed(
             )
         )
         await session.commit()
-        logger.info("share_feed: added member user=%s feed=%s", user.id, feed.id)
+        log.info("share_feed: added member user=%s feed=%s", user.id, feed.id)
         return ShareResult("member", f"{email} now has access.")
 
     open_invite = await session.scalar(
@@ -98,7 +98,7 @@ async def share_feed(
         FeedInvite(feed_id=feed.id, email=email, invited_by_user_id=added_by_user_id)
     )
     await session.commit()
-    logger.info("share_feed: invited %s to feed=%s", email, feed.id)
+    log.info("share_feed: invited %s to feed=%s", email, feed.id)
     # Not "the next time they sign in": an invite is matched on a *verified*
     # address, so someone whose provider never vouched for theirs can sign in
     # repeatedly and never receive this. Say what actually has to happen. The
@@ -162,7 +162,7 @@ async def transfer_ownership(
         FeedMember(feed_id=feed.id, user_id=old_owner_id, added_by_user_id=old_owner_id)
     )
     await session.commit()
-    logger.info(
+    log.info(
         "transfer_ownership: feed=%s %s -> %s", feed.id, old_owner_id, new_owner_id
     )
 
@@ -230,5 +230,5 @@ async def claim_invites(session: AsyncSession, user: User) -> int:
 
     await session.commit()
     if claimed:
-        logger.info("claim_invites: user=%s gained %d feeds", user.id, claimed)
+        log.info("claim_invites: user=%s gained %d feeds", user.id, claimed)
     return claimed

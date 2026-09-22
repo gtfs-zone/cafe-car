@@ -5,7 +5,7 @@
 """Simulate a real GTFS trip along its shape, POSTing to cafe-car's ingest API.
 
 The simulation starts at the position the bus would actually be at right now
-according to the GTFS schedule, with a random (or fixed) delay of 5–10 minutes.
+according to the GTFS schedule, with a random (or fixed) delay of 5-10 minutes.
 Today's date is used so the trip runs in wall-clock sync when --speed 1 is used.
 
 Positions are POSTed to cafe-car's `/ingest/position` (the direct HTTP ingest
@@ -460,7 +460,7 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
     print(f"{prefix} Stops:      {len(stop_times)}")
     print(f"{prefix} Schedule:   {stop_times[0]['departure_time']} → {stop_times[-1]['arrival_time']}")
     print(f"{prefix} Duration:   {trip_duration // 60:.0f} min  ({trip_duration}s scheduled)")
-    print(f"{prefix} Delay:      {args.min_delay:.0f}–{args.max_delay:.0f}s (random walk, drift ±{args.delay_drift:.0f}s/tick, starting {delay_seconds:.0f}s)")
+    print(f"{prefix} Delay:      {args.min_delay:.0f}-{args.max_delay:.0f}s (random walk, drift ±{args.delay_drift:.0f}s/tick, starting {delay_seconds:.0f}s)")
     print(f"{prefix} Speed:      {args.speed}x  →  real runtime ≈ {trip_duration / args.speed / 60:.1f} min")
     if args.mode == "device":
         print(f"{prefix} Device:     {args.traccar_url}?id={args.tracker}  (trip resolved server-side from rules)")

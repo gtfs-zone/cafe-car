@@ -17,7 +17,7 @@ import segno
 
 from cafe_car.settings import Settings, get_settings
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 class TraccarClient:
@@ -148,7 +148,7 @@ class TraccarClient:
             except httpx.HTTPError:
                 # Grouping is a visibility convenience; never block provisioning
                 # on it. The device is still created, just ungrouped.
-                logger.warning(
+                log.warning(
                     "could not resolve Traccar group %r; creating %r ungrouped",
                     self._device_group,
                     unique_id,
@@ -212,7 +212,7 @@ async def provision_device(nickname: str, device_key: str) -> None:
         await get_traccar_client().ensure_device(name=nickname, unique_id=device_key)
     except Exception:
         # No device_key in the message: this lands in logs.
-        logger.warning(
+        log.warning(
             "could not provision the Traccar device for tracker %r",
             nickname,
             exc_info=True,
@@ -231,6 +231,6 @@ async def retire_device(device_key: str) -> None:
         await get_traccar_client().delete_device(device_key)
     except Exception:
         # No device_key in the message: this lands in logs.
-        logger.warning(
+        log.warning(
             "could not retire the Traccar device for a tracker", exc_info=True
         )

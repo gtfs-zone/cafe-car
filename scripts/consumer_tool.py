@@ -859,7 +859,7 @@ def push_to_map(data: dict) -> None:
 
 
 class MapHandler(BaseHTTPRequestHandler):
-    def do_GET(self):  # noqa: N802
+    def do_GET(self):
         if self.path == "/":
             body = MAP_HTML.replace(
                 "__ROUTE_NAMES__", json.dumps(_route_names)
@@ -896,7 +896,7 @@ class MapHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def log_message(self, format, *args):  # noqa: A002
+    def log_message(self, format, *args):
         pass
 
 

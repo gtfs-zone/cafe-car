@@ -21,7 +21,7 @@ import httpx
 
 from cafe_car.settings import get_settings
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 # Renew this many seconds before the token actually expires, so a request never
 # leaves with a token that dies in flight.

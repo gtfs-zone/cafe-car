@@ -179,6 +179,7 @@ curl -H "X-Auth-Request-User: alice" -H "Authorization: Bearer $TOKEN" http://lo
 - Never match an invite or link two accounts on an **unverified** email; that is an account-takeover primitive
 - Use `uv` for all package management (never `pip install` directly)
 - Run `uv run ruff check src/` before committing
+- Module loggers are named `log`, never `logger`: `log = logging.getLogger(__name__)`
 
 ## Related Repos
 

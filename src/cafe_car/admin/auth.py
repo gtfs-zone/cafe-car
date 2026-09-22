@@ -15,7 +15,7 @@ from cafe_car.database import get_session_factory
 from cafe_car.settings import get_settings
 from cafe_car.sharing import claim_invites
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 def _decode_jwt_claims(token: str) -> dict:
@@ -163,7 +163,7 @@ async def ensure_identity(request: Request, session: AsyncSession) -> int:
         # normally links these upstream, so reaching here means something
         # bypassed it. /account offers the merge; this line is so the
         # duplicate is visible in the log even if they never take it up.
-        logger.warning(
+        log.warning(
             "ensure_identity: new user=%s duplicates user=%s on %s",
             user.id,
             link_candidate_id,
@@ -210,7 +210,7 @@ class OIDCAuthBackend(AuthenticationBackend):
     async def authenticate(self, request: Request) -> bool:
         subject = request_subject(request)
         if not subject:
-            logger.warning(
+            log.warning(
                 "authenticate: no subject header for path=%s", request.url.path
             )
             return False
@@ -219,6 +219,6 @@ class OIDCAuthBackend(AuthenticationBackend):
             async with factory() as session:
                 user_id = await ensure_identity(request, session)
         except Exception:
-            logger.exception("authenticate: DB error for subject=%s", subject)
+            log.exception("authenticate: DB error for subject=%s", subject)
             raise
         return bool(user_id)

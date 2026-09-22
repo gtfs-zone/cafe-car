@@ -4,11 +4,11 @@
 import argparse
 import sys
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from google.transit import gtfs_realtime_pb2
 from google.protobuf import json_format
 from google.protobuf.message import DecodeError
+from google.transit import gtfs_realtime_pb2
 
 INCREMENTALITY = {
     0: "FULL_DATASET",
@@ -39,7 +39,7 @@ def parse(data: bytes) -> gtfs_realtime_pb2.FeedMessage:
 def fmt_ts(ts: int) -> str:
     if ts == 0:
         return "-"
-    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def fmt_window(alert) -> str:

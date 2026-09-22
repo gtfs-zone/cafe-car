@@ -23,7 +23,7 @@ from sqlalchemy.orm import selectinload
 if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 # How stale ``Identity.last_seen_at`` is allowed to get before a login rewrites
 # it. The column exists to tell a live credential from a dormant one, and no
@@ -114,20 +114,20 @@ async def resolve_login(
         existing = await user_with_verified_email(session, email)
         if existing is not None:
             candidate = existing.id
-            logger.info(
+            log.info(
                 "resolve_login: verified email %s already belongs to user=%s",
                 email,
                 candidate,
             )
 
-    logger.info("resolve_login: new identity provider=%s subject=%s", provider, subject)
+    log.info("resolve_login: new identity provider=%s subject=%s", provider, subject)
     if email and not email_verified:
         # Worth a warning, not an info: this credential cannot claim a feed
         # invite, cannot be shared with by address, and cannot be offered as a
         # link candidate, all of which look like the feature is broken rather
         # than like the issuer never vouched for the address. A broker with
         # `trustEmail` off is the usual cause.
-        logger.warning(
+        log.warning(
             "resolve_login: new identity subject=%s has unverified email %s, "
             "invites and account linking will not match it",
             subject,
@@ -286,7 +286,7 @@ async def merge_users(
 
     await session.delete(absorbed)
     await session.commit()
-    logger.info("merge_users: %s absorbed into %s", absorbed_id, absorbing_id)
+    log.info("merge_users: %s absorbed into %s", absorbed_id, absorbing_id)
 
 
 def _refresh_profile(
