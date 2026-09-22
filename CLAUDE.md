@@ -68,7 +68,7 @@ The public GTFS-RT endpoints (`rt.gtfs.zone`) have **no authentication middlewar
 
 There are two separate FastAPI apps sharing the same DB/Redis:
 
-- `src/cafe_car/main.py` → **public API** (`app = create_public_app()`): GTFS-RT endpoints (`/{feed_name}/trip_updates.pb`, `vehicle_positions.pb`, `service_alerts.pb`, plus a `.json` twin of each), the public feed catalog (`GET /feeds`) and the HTTP ingest seam (`POST /ingest/position`, `/ingest/trip-update`, `/ingest/alerts`). Run with `uv run fastapi dev src/cafe_car/main.py`.
+- `src/cafe_car/main.py` → **public API** (`app = create_public_app()`): GTFS-RT endpoints (`/{feed_name}/trip_updates.pb`, `vehicle_positions.pb`, `service_alerts.pb`, plus a `.json` twin of each), the public feed catalog (`GET /feeds`) and the HTTP ingest seam (`POST /ingest/position`, `/ingest/trip-update`, their `/ingest/positions` and `/ingest/trip-updates` batch twins, and `/ingest/alerts`). Run with `uv run fastapi dev src/cafe_car/main.py`.
 - `src/cafe_car/admin_main.py` → **admin app** (`app = create_admin_app()`): [yard-master](https://git.kcfam.us/gtfs.zone/yard-master)'s JSON API, mounted at `/api`, plus `admin/entity_router.py`'s hand-written routes (sharing, account linking). No SQLAdmin any more — this app has no HTML UI of its own; yard-master, a separate static SPA, is that UI now. Uses `SessionMiddleware`, `DBSessionMiddleware`, and `SubjectMiddleware`. Run with `uv run fastapi dev src/cafe_car/admin_main.py`.
 
 Rules for anything added under `/api`:

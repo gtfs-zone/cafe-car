@@ -631,3 +631,148 @@ class TestTripUpdateIngest:
         assert list(redis.data) == ["trip_update:gently-tender-oyster:T1:20260803"]
         stored = json.loads(redis.data["trip_update:gently-tender-oyster:T1:20260803"])
         assert stored["tracker_id"] == "gently-tender-oyster"
+
+
+class TestBatchIngest:
+    """``/ingest/positions`` and ``/ingest/trip-updates``.
+
+    One request per poll cycle instead of one per vehicle. The records are the
+    singular routes' records, so what is asserted here is only what batching
+    adds: every record lands, each one publishes, and a bad record takes its
+    batch down rather than being silently dropped.
+    """
+
+    @staticmethod
+    def _position(tracker_id: str, vehicle_id: str, trip_id: str) -> dict:
+        return {
+            "tracker_id": tracker_id,
+            "vehicle_id": vehicle_id,
+            "trip_id": trip_id,
+            "lat": 42.0,
+            "lon": -71.0,
+            "timestamp": 1_700_000_000,
+        }
+
+    async def test_every_position_in_a_batch_is_stored_and_published(
+        self, make_public_client: ClientFactory, world: dict
+    ) -> None:
+        redis = FakeRedis()
+        client = await make_public_client(redis)
+
+        response = await client.post(
+            "/ingest/positions",
+            headers={"Authorization": f"Bearer {INGEST_TOKEN}"},
+            json={
+                "positions": [
+                    self._position("gently-tender-oyster", "449", "T1"),
+                    self._position("gently-tender-oyster", "450", "T2"),
+                    self._position("quietly-sleepy-heron", "bus-7", "T3"),
+                ]
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok", "count": 3}
+        assert sorted(redis.data) == [
+            "vehicle:gently-tender-oyster:449",
+            "vehicle:gently-tender-oyster:450",
+            "vehicle:quietly-sleepy-heron:bus-7",
+        ]
+        assert len(redis.published) == 3
+
+    async def test_a_bad_record_rejects_its_batch_and_writes_nothing(
+        self, make_public_client: ClientFactory, world: dict
+    ) -> None:
+        """Validation is whole-body, so a chunk fails as a unit.
+
+        The alternative, dropping the offending record and answering 200, hides
+        a broken producer behind a healthy-looking response.
+        """
+        redis = FakeRedis()
+        client = await make_public_client(redis)
+        bad = self._position("gently-tender-oyster", "450", "T2")
+        del bad["lat"]
+
+        response = await client.post(
+            "/ingest/positions",
+            headers={"Authorization": f"Bearer {INGEST_TOKEN}"},
+            json={
+                "positions": [
+                    self._position("gently-tender-oyster", "449", "T1"),
+                    bad,
+                ]
+            },
+        )
+
+        assert response.status_code == 422
+        assert redis.data == {}
+
+    async def test_a_batch_needs_the_ingest_token(
+        self, make_public_client: ClientFactory, world: dict
+    ) -> None:
+        redis = FakeRedis()
+        client = await make_public_client(redis)
+
+        response = await client.post(
+            "/ingest/positions",
+            json={"positions": [self._position("gently-tender-oyster", "449", "T1")]},
+        )
+
+        assert response.status_code == 403
+        assert redis.data == {}
+
+    async def test_every_trip_update_in_a_batch_is_stored(
+        self, make_public_client: ClientFactory, world: dict
+    ) -> None:
+        redis = FakeRedis()
+        client = await make_public_client(redis)
+
+        response = await client.post(
+            "/ingest/trip-updates",
+            headers={"Authorization": f"Bearer {INGEST_TOKEN}"},
+            json={
+                "trip_updates": [
+                    {
+                        "tracker_id": "gently-tender-oyster",
+                        "trip_id": trip_id,
+                        "timestamp": 1_700_000_000,
+                        "stop_time_updates": [
+                            {"stop_sequence": 1, "arrival_delay": 60}
+                        ],
+                    }
+                    for trip_id in ("T1", "T2")
+                ]
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok", "count": 2}
+        assert sorted(redis.data) == [
+            "trip_update:gently-tender-oyster:T1",
+            "trip_update:gently-tender-oyster:T2",
+        ]
+
+    async def test_a_device_key_is_normalised_once_for_the_whole_batch(
+        self, make_public_client: ClientFactory, world: dict
+    ) -> None:
+        """The per-batch tracker cache must not change what gets written."""
+        redis = FakeRedis()
+        client = await make_public_client(redis)
+        device_key = world["reporting"].device_key
+
+        response = await client.post(
+            "/ingest/positions",
+            headers={"Authorization": f"Bearer {INGEST_TOKEN}"},
+            json={
+                "positions": [
+                    self._position(device_key, "449", "T1"),
+                    self._position(device_key, "450", "T2"),
+                ]
+            },
+        )
+
+        assert response.status_code == 200
+        assert sorted(redis.data) == [
+            "vehicle:gently-tender-oyster:449",
+            "vehicle:gently-tender-oyster:450",
+        ]

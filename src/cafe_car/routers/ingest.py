@@ -5,6 +5,10 @@ hell-gate-bridge, and simulate_trip.py), as opposed to the Traccar shim, which
 resolves the trip server-side. Writes the *exact* `vehicle:*` record shape that
 `gtfs_rt.py` and the vehicle-poser shim use, with the same 60s TTL, so the serving
 code needs zero changes.
+
+Positions and trip updates each come in a singular and a batch route. The batch
+takes a list of the same records and is what a producer running a fleet uses, to
+spend one round trip per poll cycle rather than one per vehicle.
 """
 
 from __future__ import annotations
@@ -147,6 +151,16 @@ class TripUpdateIngest(BaseModel):
     start_date: str | None = None  # see PositionIngest.start_date
 
 
+class PositionBatchIngest(BaseModel):
+    # One poll cycle's worth of fixes, from any number of trackers. The records
+    # are the same shape the singular route takes; batching is transport only.
+    positions: list[PositionIngest]
+
+
+class TripUpdateBatchIngest(BaseModel):
+    trip_updates: list[TripUpdateIngest]
+
+
 class AlertEntityIngest(BaseModel):
     agency_id: str | None = None
     route_id: str | None = None
@@ -229,19 +243,29 @@ def _check_auth(authorization: str | None) -> None:
         raise HTTPException(status_code=403, detail="Invalid ingest token")
 
 
-@router.post("/ingest/position")
-async def ingest_position(
-    body: PositionIngest,
-    request: Request,
-    authorization: str | None = Header(default=None),
-    session: AsyncSession = Depends(get_session),  # noqa: B008
-) -> dict[str, str]:
-    _check_auth(authorization)
+async def _resolve_cached(
+    session: AsyncSession, tracker_id: str, cache: dict[str, Tracker | None]
+) -> Tracker | None:
+    """``_resolve_tracker`` memoised for the life of one request.
 
+    A batch is one producer's poll cycle, which is normally its whole fleet
+    under a single tracker, so this turns a per-record lookup into one.
+    """
+    if tracker_id not in cache:
+        cache[tracker_id] = await _resolve_tracker(session, tracker_id)
+    return cache[tracker_id]
+
+
+async def _store_position(
+    session: AsyncSession,
+    redis: object,
+    body: PositionIngest,
+    cache: dict[str, Tracker | None],
+) -> None:
     # Resolve before building the record: everything downstream keys off the
     # surrogate id, so a producer sending a `device_key` must be normalised here
     # rather than at each use.
-    tracker = await _resolve_tracker(session, body.tracker_id)
+    tracker = await _resolve_cached(session, body.tracker_id, cache)
     tracker_id = tracker.id if tracker is not None else body.tracker_id
 
     # Byte-for-byte the record the vehicle-poser shim writes; keys read by
@@ -274,7 +298,6 @@ async def ingest_position(
     if body.current_status:
         record["current_status"] = body.current_status
 
-    redis = request.app.state.redis
     # Keyed on the vehicle, never on the trip: the next fix from this vehicle
     # overwrites this record whatever trip it has moved on to, so a vehicle
     # that changes trip cannot appear twice in one feed.
@@ -305,21 +328,17 @@ async def ingest_position(
         await redis.publish(
             feed_channel(tracker.feed_id), json.dumps(position_event(view))
         )
-    return {"status": "ok"}
 
 
-@router.post("/ingest/trip-update")
-async def ingest_trip_update(
+async def _store_trip_update(
+    session: AsyncSession,
+    redis: object,
     body: TripUpdateIngest,
-    request: Request,
-    authorization: str | None = Header(default=None),
-    session: AsyncSession = Depends(get_session),  # noqa: B008
-) -> dict[str, str]:
-    _check_auth(authorization)
-
+    cache: dict[str, Tracker | None],
+) -> None:
     # Same normalisation as the position path: a producer configured with a
     # `device_key` must land in the namespace the serving side reads.
-    tracker = await _resolve_tracker(session, body.tracker_id)
+    tracker = await _resolve_cached(session, body.tracker_id, cache)
     tracker_id = tracker.id if tracker is not None else body.tracker_id
 
     # Rich, multi-stop record read by gtfs_rt.py::trip_updates. Supersedes the
@@ -344,7 +363,7 @@ async def ingest_trip_update(
     # within one feed's GTFS, and two feeds both numbering a trip "1" would
     # otherwise overwrite each other's predictions.
     key = trip_update_key(tracker_id, body.trip_id, body.start_date)
-    await request.app.state.redis.setex(key, TRIP_UPDATE_TTL, json.dumps(record))
+    await redis.setex(key, TRIP_UPDATE_TTL, json.dumps(record))
     # Stored, not rejected, for the same reason a position is: the token
     # authorises ingest, and no feed scans a tracker the DB does not know. Logged
     # so a stale id does not go unnoticed for weeks.
@@ -355,7 +374,68 @@ async def ingest_trip_update(
             body.tracker_id,
             key,
         )
+
+
+@router.post("/ingest/position")
+async def ingest_position(
+    body: PositionIngest,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> dict[str, str]:
+    _check_auth(authorization)
+    await _store_position(session, request.app.state.redis, body, {})
     return {"status": "ok"}
+
+
+@router.post("/ingest/positions")
+async def ingest_positions(
+    body: PositionBatchIngest,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> dict[str, str | int]:
+    """One poll cycle's fixes in one request.
+
+    A producer running a fleet under one tracker (Amtrak: ~53 trains) otherwise
+    spends one round trip per vehicle per cycle. Validation is whole-body, so a
+    malformed record rejects the batch it is in with 422 and nothing is written;
+    producers send in chunks so that costs a chunk, not a poll.
+    """
+    _check_auth(authorization)
+    cache: dict[str, Tracker | None] = {}
+    redis = request.app.state.redis
+    for position in body.positions:
+        await _store_position(session, redis, position, cache)
+    return {"status": "ok", "count": len(body.positions)}
+
+
+@router.post("/ingest/trip-update")
+async def ingest_trip_update(
+    body: TripUpdateIngest,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> dict[str, str]:
+    _check_auth(authorization)
+    await _store_trip_update(session, request.app.state.redis, body, {})
+    return {"status": "ok"}
+
+
+@router.post("/ingest/trip-updates")
+async def ingest_trip_updates(
+    body: TripUpdateBatchIngest,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> dict[str, str | int]:
+    """The trip-update twin of ``/ingest/positions``; same batching rules."""
+    _check_auth(authorization)
+    cache: dict[str, Tracker | None] = {}
+    redis = request.app.state.redis
+    for update in body.trip_updates:
+        await _store_trip_update(session, redis, update, cache)
+    return {"status": "ok", "count": len(body.trip_updates)}
 
 
 @router.post("/ingest/alerts")

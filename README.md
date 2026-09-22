@@ -60,8 +60,10 @@ Service-to-service, guarded by a shared bearer token (`INGEST_API_TOKEN`), for p
 
 | Endpoint | Description |
 |----------|-------------|
-| `POST /ingest/position` | One vehicle position, written as a `vehicle:{tracker_id}:{slug}` record with a 60s TTL |
+| `POST /ingest/position` | One vehicle position, written as a `vehicle:{tracker_id}:{vehicle_id}` record with a 60s TTL |
+| `POST /ingest/positions` | A batch of positions (`{"positions": [...]}`), one poll cycle in one request |
 | `POST /ingest/trip-update` | One trip's delay/stop-time predictions, 300s TTL |
+| `POST /ingest/trip-updates` | A batch of trip updates (`{"trip_updates": [...]}`) |
 | `POST /ingest/alerts` | Replace a feed's producer-published service alerts |
 
 `GET /feed_urls` is internal-only: it refuses any request carrying `X-Forwarded-For`.
