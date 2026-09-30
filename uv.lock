@@ -186,7 +186,7 @@ requires-dist = [
     { name = "gtfs-realtime-bindings", specifier = ">=2.2.0" },
     { name = "httpx" },
     { name = "pydantic-settings" },
-    { name = "railroad-club", git = "https://git.kcfam.us/gtfs.zone/railroad-club.git" },
+    { name = "railroad-club", git = "https://github.com/gtfs-zone/railroad-club.git" },
     { name = "redis", extras = ["asyncio"] },
     { name = "segno" },
     { name = "sqladmin", extras = ["full"], specifier = "==0.23.0" },
@@ -1133,7 +1133,7 @@ wheels = [
 [[package]]
 name = "railroad-club"
 version = "0.1.0"
-source = { git = "https://git.kcfam.us/gtfs.zone/railroad-club.git#0952383e670c89a4fe559956750941e5a9dedafb" }
+source = { git = "https://github.com/gtfs-zone/railroad-club.git#647f187940e698cf7d507c3250e39511d9d5d9b9" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
