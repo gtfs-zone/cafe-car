@@ -1,8 +1,8 @@
 # cafe-car
 
-Core API for [GTFS.Zone](https://gtfs.zone): serves GTFS-RT feeds and the JSON API [yard-master](https://git.kcfam.us/gtfs.zone/yard-master) uses to manage feeds, trackers and service alerts. cafe-car has no UI of its own; yard-master is the UI.
+Core API for [GTFS.Zone](https://gtfs.zone): serves GTFS-RT feeds and the JSON API [yard-master](https://github.com/gtfs-zone/yard-master) uses to manage feeds, trackers and service alerts. cafe-car has no UI of its own; yard-master is the UI.
 
-Part of a larger stack; see [deploy-gtfs-rt](https://git.kcfam.us/gtfs.zone/deploy-gtfs-rt) for the full deployment.
+Part of a larger stack; see [deploy-gtfs-rt](https://github.com/gtfs-zone/deploy-gtfs-rt) for the full deployment.
 
 ### How it fits together
 
@@ -27,7 +27,7 @@ trip-updogger
     └─> sweeps vehicle:* + scheduled stop_times → Redis DB 1 (trip_update:{tracker_id}:{trip_id} keys)
 ```
 
-There is no MQTT broker and no OwnTracks path any more: positions arrive over HTTP, either through [vehicle-poser](https://git.kcfam.us/gtfs.zone/vehicle-poser) (Traccar's forwarder) or directly on this service's `/ingest` API. Trip delays are written by [trip-updogger](https://git.kcfam.us/gtfs.zone/trip-updogger) and by upstream pollers.
+There is no MQTT broker and no OwnTracks path any more: positions arrive over HTTP, either through [vehicle-poser](https://github.com/gtfs-zone/vehicle-poser) (Traccar's forwarder) or directly on this service's `/ingest` API. Trip delays are written by [trip-updogger](https://github.com/gtfs-zone/trip-updogger) and by upstream pollers.
 
 ---
 
