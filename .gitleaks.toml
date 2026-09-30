@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Dev placeholder cookie secret (base64 of dev-local-cookie-secret-32-bytes)"
+regexes = ['''^ZGV2LWxvY2FsLWNvb2tpZS1zZWNyZXQtMzItYnl0ZXM=$''']
