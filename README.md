@@ -95,7 +95,7 @@ curl -H "X-Auth-Request-User: alice" -H "X-Auth-Request-Email: alice@example.com
      http://localhost:8001/api/me
 ```
 
-`X-Auth-Request-User` is the OIDC subject and is the only thing identifying the caller; the header alone creates the `User` and `Identity` on first use. Paths that need a *verified* email (invite claiming, account linking) also want a token: see CLAUDE.md for the unsigned-JWT recipe under `DEBUG=true`.
+`X-Auth-Request-User` is the OIDC subject and is the only thing identifying the caller; the header alone creates the `User` and `Identity` on first use. Paths that need a *verified* email (invite claiming, account linking) also want a token: see [docs/architecture.md](docs/architecture.md#simulating-oauth2-proxy-locally) for the unsigned-JWT recipe under `DEBUG=true`.
 
 ---
 
