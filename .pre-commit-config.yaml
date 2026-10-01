@@ -6,3 +6,12 @@ repos:
     hooks:
       - id: commitizen
         stages: [commit-msg]
+
+  - repo: local
+    hooks:
+      - id: check
+        name: check
+        entry: scripts/check.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
