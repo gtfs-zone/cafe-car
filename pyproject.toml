@@ -3,6 +3,7 @@ name = "gtfs-zone-rt-api"
 version = "0.2.0"
 requires-python = ">=3.13"
 description = "Core API for GTFS.Zone: serves GTFS-RT protobuf feeds and provides an admin UI"
+license = "AGPL-3.0-or-later"
 dependencies = [
     "fastapi[standard]",
     "sqlmodel",
