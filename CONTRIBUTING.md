@@ -82,7 +82,7 @@ Then push the commit and the tag:
 git push --follow-tags origin main
 ```
 
-Pushing a version tag triggers `.github/workflows/build.yml`, which builds the image and pushes it to `ghcr.io/gtfs-zone/gtfs-zone-rt-api:vX.Y.Z`. [gtfs-zone-infra](https://github.com/gtfs-zone/gtfs-zone-infra) pins that tag; bumping the pin there is what deploys it. Pushes to `main` also publish the image, tagged with the short SHA and `latest`.
+Pushing a version tag triggers `.github/workflows/build.yml`, which builds the image and pushes it to `ghcr.io/gtfs-zone/gtfs-zone-rt-api:vX.Y.Z`. [gtfs-zone-infra](https://github.com/gtfs-zone/gtfs-zone-infra) pins that tag; bumping the pin there is what deploys it.
 
 ## Development Workflow
 

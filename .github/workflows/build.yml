@@ -1,12 +1,10 @@
 name: Build
 
-# Runs the check workflow, then builds the image and pushes it to
-# ghcr.io/<owner>/<repo> tagged with the short SHA, latest, and the tag on v*.
+# On a v* tag: runs the check workflow, then builds the image and pushes it to
+# ghcr.io/<owner>/<repo> tagged with the tag and latest.
 
 on:
   push:
-    branches:
-      - main
     tags:
       - 'v*'
 
@@ -30,19 +28,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Image tags
-        id: tags
-        run: |
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY}"
-          SHA="${GITHUB_SHA::7}"
-          TAGS="$IMAGE:$SHA,$IMAGE:latest"
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            TAGS="$TAGS,$IMAGE:$GITHUB_REF_NAME"
-          fi
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
-
       - name: Set up Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
@@ -59,4 +44,6 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.tags.outputs.tags }}
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ghcr.io/${{ github.repository }}:latest

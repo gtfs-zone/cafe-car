@@ -2,7 +2,7 @@
 
 FastAPI service: the public GTFS-RT feeds at `rt.gtfs.zone`, the HTTP ingest
 seam the producers post to, and rt-manager's authenticated JSON API at
-`manage.rt.gtfs.zone/api`. Pushing to `main` publishes the image.
+`manage.rt.gtfs.zone/api`. A `v*` tag publishes the image.
 
 ## Commands
 
