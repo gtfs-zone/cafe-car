@@ -28,8 +28,8 @@ import json
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from railroad_club.feed_events import feed_channel
-from railroad_club.models.gtfs_static import GtfsStaticFeed, LoadStatus
+from gtfs_zone_db_models.feed_events import feed_channel
+from gtfs_zone_db_models.models.gtfs_static import GtfsStaticFeed, LoadStatus
 
 from tests.factories import PROVIDER, add_member, make_feed, make_user
 
@@ -174,13 +174,13 @@ def make_app(
     monkeypatch.setenv("SESSION_SECRET_KEY", "test-secret")
     monkeypatch.setenv("OIDC_PROVIDER", PROVIDER)
 
-    import cafe_car.database as database
-    from cafe_car.settings import get_settings
+    import gtfs_zone_rt_api.database as database
+    from gtfs_zone_rt_api.settings import get_settings
 
     get_settings.cache_clear()
     monkeypatch.setattr(database, "_engine", engine)
 
-    from cafe_car.admin_main import create_admin_app
+    from gtfs_zone_rt_api.admin_main import create_admin_app
 
     def build(redis: FakePubSub) -> FastAPI:
         app = create_admin_app()
@@ -283,7 +283,7 @@ async def test_published_payloads_are_forwarded_unparsed(
 async def test_an_idle_channel_heartbeats(
     make_app: AppFactory, world: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cafe_car.api import events
+    from gtfs_zone_rt_api.api import events
 
     monkeypatch.setattr(events, "HEARTBEAT_SECONDS", 0.01)
     app = make_app(FakePubSub())

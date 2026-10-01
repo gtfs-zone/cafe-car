@@ -8,7 +8,7 @@ Two related pieces of work:
    *or* Google and land on the same account. Keycloak handles brokering, the
    "an account with this email already exists, link it?" first-login prompt,
    and a self-serve Account Console where a logged-in user adds another
-   provider. cafe-car additionally grows a canonical `user` + `identity` model
+   provider. rt-api additionally grows a canonical `user` + `identity` model
    so the app is not permanently married to one IdP's `sub` semantics.
 2. **Sharing.** A `Feed` gets one **owner** and any number of **members** with
    equivalent access, except that members may not transfer/delete ownership or
@@ -31,22 +31,22 @@ Decisions already made (do not relitigate):
 
 | Thing | Repo / path |
 |---|---|
-| `User`, `Feed`, `Tracker`, … SQLModel models | `railroad-club` → `src/railroad_club/models/` |
-| Alembic migrations (`railroad-club-migrate`) | `railroad-club` → `src/railroad_club/alembic/versions/` |
-| Admin app, auth backend, scoped views | `cafe-car` → `src/cafe_car/admin/` |
-| Dev docker-compose, Dex config | `music-student` → `docker-compose.yml`, `dev/dex/config.yaml` |
-| Prod k8s (Dex Deployment, config, SOPS secrets) | `deploy-gtfs-rt` → `gtfs/dex/` |
+| `User`, `Feed`, `Tracker`, … SQLModel models | `gtfs-zone-db-models` → `src/gtfs_zone_db_models/models/` |
+| Alembic migrations (`gtfs-zone-db-models-migrate`) | `gtfs-zone-db-models` → `src/gtfs_zone_db_models/alembic/versions/` |
+| Admin app, auth backend, scoped views | `rt-api` → `src/gtfs_zone_rt_api/admin/` |
+| Dev docker-compose, Dex config | `dev-stack` → `docker-compose.yml`, `dev/dex/config.yaml` |
+| Prod k8s (Dex Deployment, config, SOPS secrets) | `gtfs-zone-infra` → `gtfs/dex/` |
 
 ### How identity works today
 
 - oauth2-proxy sets `X-Auth-Request-User`; `OIDCAuthBackend.authenticate`
-  (`src/cafe_car/admin/auth.py:37`) reads it, upserts a `User` row keyed on
+  (`src/gtfs_zone_rt_api/admin/auth.py:37`) reads it, upserts a `User` row keyed on
   `(provider="dex", provider_subject=<header>)`, and stashes the raw string in
   `request.session["subject"]` and `current_subject_var`.
 - **Every** scoped query is `… .join(User, Feed.owner_id == User.id).where(User.provider_subject == subject)`.
-  It appears ~20 times across five ModelViews in `src/cafe_car/admin/views.py`
-  and four helpers in `src/cafe_car/admin/entity_router.py`.
-- `Feed.owner_id` is a plain FK to `user.id` (`railroad_club/models/feed.py`).
+  It appears ~20 times across five ModelViews in `src/gtfs_zone_rt_api/admin/views.py`
+  and four helpers in `src/gtfs_zone_rt_api/admin/entity_router.py`.
+- `Feed.owner_id` is a plain FK to `user.id` (`gtfs_zone_db_models/models/feed.py`).
 
 ### Two landmines in the current setup
 
@@ -61,10 +61,10 @@ Decisions already made (do not relitigate):
    (base64 of `{userID, connID}`), and Dex has no notion of one user with two
    connectors. This is the whole reason for the swap; it is not a config gap.
 
-### Blast radius outside cafe-car
+### Blast radius outside rt-api
 
 - **Traccar** authenticates *its* manager users against Dex directly as the
-  `traccar` static client (`deploy-gtfs-rt/gtfs/dex/config.yaml`). It must move
+  `traccar` static client (`gtfs-zone-infra/gtfs/dex/config.yaml`). It must move
   to Keycloak in the same cutover or it breaks.
 - **Redis DB 0** holds oauth2-proxy sessions. They reference Dex tokens and must
   be flushed at cutover.
@@ -75,7 +75,7 @@ Decisions already made (do not relitigate):
 
 ## Phase 1: Keycloak in the dev compose stack
 
-Stand Keycloak up next to Dex in `music-student` first, on a different port, so
+Stand Keycloak up next to Dex in `dev-stack` first, on a different port, so
 both can run while the app is ported. Configure it declaratively (realm JSON
 imported at boot) rather than by clicking, so dev and prod stay identical and
 the config is reviewable in git.
@@ -87,10 +87,10 @@ The realm needs: a `gtfs` realm; an `oauth2-proxy` confidential client; a
 built-in chain is precisely the "we found an account with this email, confirm to
 link" behavior we want, and it does **not** auto-link on an unverified email.
 
-- [x] Add a `keycloak` service to `music-student/docker-compose.yml`
+- [x] Add a `keycloak` service to `dev-stack/docker-compose.yml`
       (`quay.io/keycloak/keycloak:26.4`, `start-dev --import-realm`), backed by
       the existing `db` service with its own `keycloak` database.
-- [x] Write `music-student/dev/keycloak/gtfs-realm.json`: realm, clients, IdPs,
+- [x] Write `dev-stack/dev/keycloak/gtfs-realm.json`: realm, clients, IdPs,
       and two dev users (alice/bob) at parity with the old static passwords.
 - [x] Wire the GitHub/Google IdPs, **as two fake Keycloak realms**, see below.
 - [x] Repoint `oauth2-proxy` at Keycloak
@@ -133,10 +133,10 @@ link" behavior we want, and it does **not** auto-link on an unverified email.
   in the README; it will bite otherwise.
 - Dex is still running and still serves Traccar. It moves in Phase 7.
 - `provider` is still hardcoded to the `oidc_provider` setting (`"dex"`) in
-  cafe-car, hence the misleading `provider=dex` on the Keycloak row above.
+  rt-api, hence the misleading `provider=dex` on the Keycloak row above.
   Phase 3 changes that string; Phase 7 rewrites the rows.
 
-## Phase 2: Canonical `user` + `identity` schema in railroad-club
+## Phase 2: Canonical `user` + `identity` schema in gtfs-zone-db-models
 
 Split "the person" from "the credential". `User` becomes the identity-agnostic
 principal that everything else FKs to; `Identity` is one row per (provider,
@@ -151,12 +151,12 @@ Identity  id, user_id FK, provider, provider_subject, email, email_verified,
 `User.provider` / `User.provider_subject` go away. `Feed.owner_id` keeps
 pointing at `user.id`, so no FK churn elsewhere.
 
-- [x] Add `src/railroad_club/models/identity.py`; rework `models/user.py`.
+- [x] Add `src/gtfs_zone_db_models/models/identity.py`; rework `models/user.py`.
 - [x] Alembic migration `a4b5c6d7e8f9`: create `identity`, backfill one row per
       existing user, drop the old columns and `uq_user_provider_subject`.
 - [x] Lossy downgrade that collapses the earliest identity back, documented as
       such in the migration docstring.
-- [x] Re-lock cafe-car against the new railroad-club.
+- [x] Re-lock rt-api against the new gtfs-zone-db-models.
 
 **Discoveries**
 
@@ -197,17 +197,17 @@ pattern everywhere. Rather than search-and-replace 20 call sites into a new
 Phase 4's membership rules a single-place change.
 
 ```python
-# cafe_car/admin/access.py
+# gtfs_zone_rt_api/admin/access.py
 def accessible_feed_ids(user_id: int) -> Select:      # owner OR member
 def owned_feed_ids(user_id: int) -> Select:           # owner only
 ```
 
 - [x] Rewrite `admin/auth.py` around `Identity`, via a new
-      `cafe_car/accounts.py::resolve_login`; keeps the `claims["sub"] ==
+      `gtfs_zone_rt_api/accounts.py::resolve_login`; keeps the `claims["sub"] ==
       subject` guard and now reads `email_verified`.
 - [x] Store `request.session["user_id"]`; `subject` kept for display only.
 - [x] `current_subject_var` → `current_user_id_var`.
-- [x] Add `cafe_car/admin/access.py`.
+- [x] Add `gtfs_zone_rt_api/admin/access.py`.
 - [x] Convert all five ModelViews (18 scoping queries) and the four
       `entity_router.py` helpers.
 - [x] Update `_macros.html`: the `subject` fallback is now a UUID, not a name,
@@ -358,15 +358,15 @@ by matching a *verified* email.
 
 ## Phase 6: Linked accounts + the email-match prompt
 
-Keycloak owns the actual linking, so cafe-car's job is (a) show the user what is
+Keycloak owns the actual linking, so rt-api's job is (a) show the user what is
 linked, (b) send them to the Keycloak account console to link more, and (c)
 handle the case where a *new* identity arrives whose verified email matches an
-existing cafe-car user.
+existing rt-api user.
 
 Case (c) should be rare: Keycloak's first-broker-login flow normally catches it
 upstream and links there. But it happens whenever the same person exists in
 Keycloak twice (two accounts, different emails at Keycloak but the same email
-later verified), so cafe-car must not silently create a duplicate principal.
+later verified), so rt-api must not silently create a duplicate principal.
 Behavior: create the new `Identity` attached to a **new** user, then show a
 one-time interstitial ("an existing account uses this email; link them?"),
 which on confirm runs a merge.
@@ -379,12 +379,12 @@ absorbed `User`.
 
 - [x] `POST /account/link-confirm` + `/account/link-dismiss` in
       `entity_router.py`; the offer is recomputed live rather than stashed.
-- [x] `merge_users(absorbing_id, absorbed_id)` in `cafe_car/accounts.py`,
+- [x] `merge_users(absorbing_id, absorbed_id)` in `gtfs_zone_rt_api/accounts.py`,
       written test-first, with tests for every constraint-collision case.
 - [x] `/account` page: identity list (provider, email, verified, linked_at) + a
       "Manage linked accounts" link to
       `{keycloak}/realms/gtfs/account/#/account-security/linked-accounts`.
-- [x] `keycloak_account_url` setting in `cafe_car/settings.py` alongside the
+- [x] `keycloak_account_url` setting in `gtfs_zone_rt_api/settings.py` alongside the
       existing `oauth2_proxy_logout_url`.
 
 **Discoveries**
@@ -415,12 +415,12 @@ absorbed `User`.
   confirmation from a session that holds *one* of the two identities.
 - Merge direction: keep the **older** user as the absorber, so the longer-lived
   `user.id` (referenced by feeds) survives.
-- After the identity list changes in Keycloak, cafe-car's `identity` rows are
+- After the identity list changes in Keycloak, rt-api's `identity` rows are
   stale until the next login on that provider. Accept that: the app-side table
   is a cache of what has actually been seen, and the page should say so rather
   than claiming to mirror Keycloak.
 
-## Phase 7: Production cutover in deploy-gtfs-rt
+## Phase 7: Production cutover in gtfs-zone-infra
 
 - [ ] Keycloak Deployment/Service/Ingress under `gtfs/keycloak/`, replacing
       `gtfs/dex/`; CNPG database `keycloak` alongside the existing `dex` one.
@@ -436,8 +436,8 @@ absorbed `User`.
       `scripts/remap_identities_to_keycloak.py`.
 - [ ] Flush Redis DB 0 (oauth2-proxy sessions) at cutover.
 - [ ] Keep the Dex manifests in git for one release as a rollback path.
-- [ ] Update `cafe-car/CLAUDE.md` (the auth section describes Dex throughout)
-      and the diagram in `music-student`.
+- [ ] Update `rt-api/CLAUDE.md` (the auth section describes Dex throughout)
+      and the diagram in `dev-stack`.
 
 **Discoveries**
 
@@ -454,10 +454,10 @@ absorbed `User`.
   `provider_subject` (Dex's GitHub connector and Keycloak's GitHub IdP key on
   the same GitHub account), falling back to an unambiguous **verified** email.
   It refuses to write if anything is unmatched, or if two rows would map to one
-  Keycloak subject; that second case is two cafe-car principals for one human,
+  Keycloak subject; that second case is two rt-api principals for one human,
   which is a merge decision, not a remap. `--dry-run` is the default.
 - Exercised against the dev stack, where it correctly refused: three test users
-  exist only in cafe-car, and four identities across three users all resolve to
+  exist only in rt-api, and four identities across three users all resolve to
   the same Keycloak subject.
 
 **Gotchas**
@@ -511,7 +511,7 @@ than verified by another scratchpad script. 77 tests, `uv run pytest`.
   fails that one, as it should.
 - `.venv/bin/*` console scripts carried a stale shebang from the repo's old
   name (`redis-gtfs-rt-api`), so `uv run pytest` was silently executing a
-  different interpreter with no `railroad_club` on it. Recreating the venv
+  different interpreter with no `gtfs_zone_db_models` on it. Recreating the venv
   fixed it; worth knowing if it recurs after a rename.
 
 ---

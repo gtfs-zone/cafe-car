@@ -1,8 +1,8 @@
-# cafe-car
+# gtfs-zone-rt-api
 
-Core API for [GTFS.Zone](https://gtfs.zone): serves GTFS-RT feeds and the JSON API [yard-master](https://github.com/gtfs-zone/yard-master) uses to manage feeds, trackers and service alerts. cafe-car has no UI of its own; yard-master is the UI.
+Core API for [GTFS.Zone](https://gtfs.zone): serves GTFS-RT feeds and the JSON API [rt-manager](https://github.com/gtfs-zone/gtfs-zone-rt-manager) uses to manage feeds, trackers and service alerts. rt-api has no UI of its own; rt-manager is the UI.
 
-Part of a larger stack; see [deploy-gtfs-rt](https://github.com/gtfs-zone/deploy-gtfs-rt) for the full deployment.
+Part of a larger stack; see [gtfs-zone-infra](https://github.com/gtfs-zone/gtfs-zone-infra) for the full deployment.
 
 ### How it fits together
 
@@ -11,33 +11,33 @@ GitHub / Google / GitLab
     └─> Keycloak (OIDC provider, brokers all three onto one account)
             └─> oauth2-proxy (ForwardAuth)
                     └─> Traefik
-                            ├─> yard-master + admin app (manage.rt.<domain>), auth-gated
+                            ├─> rt-manager + admin app (manage.rt.<domain>), auth-gated
                             └─> Public API (rt.<domain>), no auth
                                     ├─> PostgreSQL (feeds, trackers, alerts, users)
                                     └─> Redis DB 1 (vehicle positions, trip updates)
 
 Traccar Client app (phone) / GPS unit
     └─> Traccar (/osmand)
-            └─> vehicle-poser (HTTP forward)  → Redis DB 1 (vehicle:{tracker_id}:* keys)
+            └─> rt-traccar-receiver (HTTP forward)  → Redis DB 1 (vehicle:{tracker_id}:* keys)
 
-hell-gate-bridge (Amtrak, Columbia County)
+rt-pollers (Amtrak, Columbia County)
     └─> POST /ingest/positions, /ingest/trip-updates (batch)  → Redis DB 1
 
-trip-updogger
+rt-delay-estimator
     └─> sweeps vehicle:* + scheduled stop_times → Redis DB 1 (trip_update:{tracker_id}:{trip_id} keys)
 ```
 
-There is no MQTT broker and no OwnTracks path any more: positions arrive over HTTP, either through [vehicle-poser](https://github.com/gtfs-zone/vehicle-poser) (Traccar's forwarder) or directly on this service's `/ingest` API. Trip delays are written by [trip-updogger](https://github.com/gtfs-zone/trip-updogger) and by upstream pollers.
+There is no MQTT broker and no OwnTracks path any more: positions arrive over HTTP, either through [rt-traccar-receiver](https://github.com/gtfs-zone/gtfs-zone-rt-traccar-receiver) (Traccar's forwarder) or directly on this service's `/ingest` API. Trip delays are written by [rt-delay-estimator](https://github.com/gtfs-zone/gtfs-zone-rt-delay-estimator) and by upstream pollers.
 
 ---
 
 ## Trackers, not drivers
 
-A `Tracker` is one producer's credential. Its `id` is a uuid4 hex surrogate: the Redis key namespace and the `tracker_id` a producer posts under. Its `device_key` is a secret pet-name (e.g. `gently-tender-oyster`) that doubles as the Traccar `uniqueId`; there is no password. Creating a tracker in yard-master auto-creates the matching Traccar device and renders a provisioning QR for the Traccar Client app.
+A `Tracker` is one producer's credential. Its `id` is a uuid4 hex surrogate: the Redis key namespace and the `tracker_id` a producer posts under. Its `device_key` is a secret pet-name (e.g. `gently-tender-oyster`) that doubles as the Traccar `uniqueId`; there is no password. Creating a tracker in rt-manager auto-creates the matching Traccar device and renders a provisioning QR for the Traccar Client app.
 
 Neither id is emitted in a feed. A vehicle is labelled with the producer's `vehicle_id`, falling back to the tracker's public `nickname`.
 
-A `TrackerRule` binds a tracker to a `trip_id` on a day-of-week and time window, which is how vehicle-poser resolves an incoming position to a trip server-side.
+A `TrackerRule` binds a tracker to a `trip_id` on a day-of-week and time window, which is how rt-traccar-receiver resolves an incoming position to a trip server-side.
 
 ---
 
@@ -52,7 +52,7 @@ A `TrackerRule` binds a tracker to a `trip_id` on a day-of-week and time window,
 | `GET /feeds` | Public feed catalog: every feed, its four URLs, and whether each realtime endpoint currently has anything in it |
 | `GET /health` | Liveness check (pings Redis + Postgres) |
 
-All of the above are unauthenticated. Feeds are configured in yard-master.
+All of the above are unauthenticated. Feeds are configured in rt-manager.
 
 ### Ingest API
 
@@ -84,11 +84,11 @@ Run Postgres and Redis externally (e.g. via the deployment stack), then:
 
 ```bash
 uv sync
-uv run fastapi dev src/cafe_car/main.py        # public API → http://localhost:8000
-uv run fastapi dev src/cafe_car/admin_main.py  # admin app  → http://localhost:8001
+uv run fastapi dev src/gtfs_zone_rt_api/main.py        # public API → http://localhost:8000
+uv run fastapi dev src/gtfs_zone_rt_api/admin_main.py  # admin app  → http://localhost:8001
 ```
 
-The admin app has no UI of its own; it serves yard-master's JSON API at `/api`. To simulate oauth2-proxy headers locally:
+The admin app has no UI of its own; it serves rt-manager's JSON API at `/api`. To simulate oauth2-proxy headers locally:
 
 ```bash
 curl -H "X-Auth-Request-User: alice" -H "X-Auth-Request-Email: alice@example.com" \
@@ -126,7 +126,7 @@ uv run scripts/simulate_trip.py --tracker <tracker-id> \
     --trip ELLSWB --speed 30 --interval 1
 ```
 
-The tracker must exist in the database (created via yard-master), and the token must match `INGEST_API_TOKEN`, for the positions to appear in the feed.
+The tracker must exist in the database (created via rt-manager), and the token must match `INGEST_API_TOKEN`, for the positions to appear in the feed.
 
 ### `provision_source.py`
 
@@ -154,7 +154,7 @@ uv run ruff check src/          # lint
 uv run ruff check --fix src/    # lint + autofix
 uv run pytest                   # run tests
 
-# Apply migrations. Models and Alembic revisions live in railroad-club, which
+# Apply migrations. Models and Alembic revisions live in gtfs-zone-db-models, which
 # ships the migrator as a console script; this repo has no alembic.ini.
-uv run railroad-club-migrate
+uv run gtfs-zone-db-models-migrate
 ```

@@ -20,10 +20,10 @@ from typing import TYPE_CHECKING
 
 import httpx
 import pytest
+from gtfs_zone_db_models.models.feed import Feed
+from gtfs_zone_db_models.models.gtfs_upload import GtfsUpload
+from gtfs_zone_db_models.object_store import ObjectNotFound
 from httpx import ASGITransport, AsyncClient, Response
-from railroad_club.models.feed import Feed
-from railroad_club.models.gtfs_upload import GtfsUpload
-from railroad_club.object_store import ObjectNotFound
 from sqlalchemy import func, select
 
 from tests.factories import PROVIDER, add_member, make_feed, make_user
@@ -90,9 +90,9 @@ def store(monkeypatch: pytest.MonkeyPatch) -> FakeStore:
     """One store, shared by every module that reaches for one."""
     fake = FakeStore()
     for module in (
-        "cafe_car.api.uploads",
-        "cafe_car.api.feeds",
-        "cafe_car.routers.static_feed",
+        "gtfs_zone_rt_api.api.uploads",
+        "gtfs_zone_rt_api.api.feeds",
+        "gtfs_zone_rt_api.routers.static_feed",
     ):
         monkeypatch.setattr(f"{module}.get_async_object_store", lambda: fake)
     return fake
@@ -100,10 +100,11 @@ def store(monkeypatch: pytest.MonkeyPatch) -> FakeStore:
 
 @pytest.fixture
 def loads(monkeypatch: pytest.MonkeyPatch) -> list[int]:
-    """Feed ids handed to schedule-foamer, in order."""
+    """Feed ids handed to static-importer, in order."""
     queued: list[int] = []
     monkeypatch.setattr(
-        "cafe_car.api.uploads.request_feed_load", lambda feed_id: queued.append(feed_id)
+        "gtfs_zone_rt_api.api.uploads.request_feed_load",
+        lambda feed_id: queued.append(feed_id),
     )
     return queued
 
@@ -117,7 +118,7 @@ def _headers(subject: str, email: str) -> dict:
     return {"X-Auth-Request-User": subject, "X-Auth-Request-Email": email}
 
 
-WRITE = {"X-Yard-Master": "1"}
+WRITE = {"X-RT-Manager": "1"}
 OWNER = _headers("kc-owner", "owner@example.com")
 MEMBER = _headers("kc-member", "member@example.com")
 STRANGER = _headers("kc-stranger", "stranger@example.com")
@@ -132,13 +133,13 @@ async def client(
     monkeypatch.setenv("SESSION_SECRET_KEY", "test-secret")
     monkeypatch.setenv("OIDC_PROVIDER", PROVIDER)
 
-    import cafe_car.database as database
-    from cafe_car.settings import get_settings
+    import gtfs_zone_rt_api.database as database
+    from gtfs_zone_rt_api.settings import get_settings
 
     get_settings.cache_clear()
     monkeypatch.setattr(database, "_engine", engine)
 
-    from cafe_car.admin_main import create_admin_app
+    from gtfs_zone_rt_api.admin_main import create_admin_app
 
     transport = ASGITransport(app=create_admin_app())
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -156,13 +157,13 @@ async def public(
     monkeypatch.setenv("REDIS_URL", "redis://unused:6379/1")
     monkeypatch.setenv("SESSION_SECRET_KEY", "test-secret")
 
-    import cafe_car.database as database
-    from cafe_car.settings import get_settings
+    import gtfs_zone_rt_api.database as database
+    from gtfs_zone_rt_api.settings import get_settings
 
     get_settings.cache_clear()
     monkeypatch.setattr(database, "_engine", engine)
 
-    from cafe_car.main import create_public_app
+    from gtfs_zone_rt_api.main import create_public_app
 
     transport = ASGITransport(app=create_public_app())
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -297,7 +298,7 @@ class TestUpload:
         store: FakeStore,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from cafe_car.settings import get_settings
+        from gtfs_zone_rt_api.settings import get_settings
 
         get_settings.cache_clear()
         monkeypatch.setenv("MAX_GTFS_ZIP_BYTES", "1024")
@@ -422,7 +423,7 @@ class TestRetention:
         loads: list[int],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from cafe_car.settings import get_settings
+        from gtfs_zone_rt_api.settings import get_settings
 
         get_settings.cache_clear()
         monkeypatch.setenv("KEEP_UPLOADS", "2")
@@ -453,7 +454,7 @@ class TestRetention:
         one" disagree, and the only way to exercise the guard: every ordinary
         sweep follows an upload, which has just made the newest one current.
         """
-        from cafe_car.settings import get_settings
+        from gtfs_zone_rt_api.settings import get_settings
 
         get_settings.cache_clear()
         monkeypatch.setenv("KEEP_UPLOADS", "0")
@@ -668,7 +669,7 @@ def _upstream(
     def factory(**kwargs: object) -> AsyncClient:
         return AsyncClient(transport=httpx.MockTransport(handler), **kwargs)
 
-    monkeypatch.setattr("cafe_car.api.feeds.httpx.AsyncClient", factory)
+    monkeypatch.setattr("gtfs_zone_rt_api.api.feeds.httpx.AsyncClient", factory)
 
 
 class TestScheduleZip:
@@ -678,9 +679,7 @@ class TestScheduleZip:
         feed = world["feed"]
         upload = (await _upload(client, feed.id, gtfs_zip())).json()
 
-        response = await client.get(
-            f"/api/feeds/{feed.id}/schedule.zip", headers=OWNER
-        )
+        response = await client.get(f"/api/feeds/{feed.id}/schedule.zip", headers=OWNER)
 
         assert response.status_code == 200
         assert response.content == gtfs_zip()
@@ -709,9 +708,7 @@ class TestScheduleZip:
         )
         feed_id = response.json()["id"]
 
-        response = await client.get(
-            f"/api/feeds/{feed_id}/schedule.zip", headers=OWNER
-        )
+        response = await client.get(f"/api/feeds/{feed_id}/schedule.zip", headers=OWNER)
 
         assert response.status_code == 404
 
@@ -749,7 +746,7 @@ class TestScheduleZip:
     async def test_an_oversize_upstream_body_is_a_502(
         self, client: AsyncClient, world: dict, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from cafe_car.settings import get_settings
+        from gtfs_zone_rt_api.settings import get_settings
 
         get_settings.cache_clear()
         monkeypatch.setenv("MAX_GTFS_ZIP_BYTES", "10")

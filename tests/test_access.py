@@ -12,23 +12,23 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 import pytest
-from railroad_club.models.feed import Feed
-from railroad_club.models.informed_entity import InformedEntity
-from railroad_club.models.service_alert import ServiceAlert
-from railroad_club.models.tracker import Tracker
-from railroad_club.models.tracker_rule import TrackerRule
+from gtfs_zone_db_models.models.feed import Feed
+from gtfs_zone_db_models.models.informed_entity import InformedEntity
+from gtfs_zone_db_models.models.service_alert import ServiceAlert
+from gtfs_zone_db_models.models.tracker import Tracker
+from gtfs_zone_db_models.models.tracker_rule import TrackerRule
 from sqlalchemy import select
 
-from cafe_car.admin.access import (
+from gtfs_zone_rt_api.admin.access import (
     accessible_feed_ids,
     member_feed_ids,
     owned_feed_ids,
 )
-from cafe_car.admin.context import current_user_is_admin_var
+from gtfs_zone_rt_api.admin.context import current_user_is_admin_var
 from tests.factories import add_member, make_feed, make_user
 
 if TYPE_CHECKING:
-    from railroad_club.models.user import User
+    from gtfs_zone_db_models.models.user import User
     from sqlmodel.ext.asyncio.session import AsyncSession
 
 

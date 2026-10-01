@@ -11,14 +11,14 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
-from railroad_club.models.feed import Feed
-from railroad_club.models.feed_invite import FeedInvite
-from railroad_club.models.feed_member import FeedMember
-from railroad_club.models.identity import Identity
-from railroad_club.models.user import User
+from gtfs_zone_db_models.models.feed import Feed
+from gtfs_zone_db_models.models.feed_invite import FeedInvite
+from gtfs_zone_db_models.models.feed_member import FeedMember
+from gtfs_zone_db_models.models.identity import Identity
+from gtfs_zone_db_models.models.user import User
 from sqlalchemy import select
 
-from cafe_car.accounts import choose_absorber, merge_users
+from gtfs_zone_rt_api.accounts import choose_absorber, merge_users
 from tests.factories import add_identity, add_member, make_feed, make_user
 
 if TYPE_CHECKING:

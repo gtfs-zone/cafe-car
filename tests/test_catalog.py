@@ -12,10 +12,10 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
+from gtfs_zone_db_models.models.informed_entity import InformedEntity
+from gtfs_zone_db_models.models.service_alert import ServiceAlert
+from gtfs_zone_db_models.models.tracker import Tracker
 from httpx import ASGITransport, AsyncClient
-from railroad_club.models.informed_entity import InformedEntity
-from railroad_club.models.service_alert import ServiceAlert
-from railroad_club.models.tracker import Tracker
 
 from tests.factories import make_feed, make_user
 
@@ -77,13 +77,13 @@ async def make_client(
     monkeypatch.setenv("REDIS_URL", "redis://unused:6379/1")
     monkeypatch.setenv("SESSION_SECRET_KEY", "test-secret")
 
-    import cafe_car.database as database
-    from cafe_car.settings import get_settings
+    import gtfs_zone_rt_api.database as database
+    from gtfs_zone_rt_api.settings import get_settings
 
     get_settings.cache_clear()
     monkeypatch.setattr(database, "_engine", engine)
 
-    from cafe_car.main import create_public_app
+    from gtfs_zone_rt_api.main import create_public_app
 
     clients: list[AsyncClient] = []
 

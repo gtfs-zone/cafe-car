@@ -44,10 +44,10 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 import httpx
-from railroad_club.models.identity import Identity
+from gtfs_zone_db_models.models.identity import Identity
 from sqlmodel import select
 
-from cafe_car.database import get_session_factory
+from gtfs_zone_rt_api.database import get_session_factory
 
 if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession
@@ -233,7 +233,7 @@ async def run(args: argparse.Namespace) -> int:
             )
 
         # Two rows mapping to one Keycloak user would violate
-        # UNIQUE(provider, provider_subject), and it means two cafe-car
+        # UNIQUE(provider, provider_subject), and it means two rt-api
         # principals for one person, which is a merge decision, not a remap.
         by_sub: dict[str, list[Identity]] = {}
         for identity, sub, _ in planned:

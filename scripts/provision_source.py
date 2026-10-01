@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Provision a feed source (Feed + Tracker) in the cafe-car database.
+"""Provision a feed source (Feed + Tracker) in the rt-api database.
 
 Creates the row chain a producer needs to surface in a GTFS-RT feed: a `Feed`
 (owned by an existing `User`) and a `Tracker`. The tracker has two identities:
 `id`, a surrogate that is the Redis key and is not secret, and `device_key`, the
 Traccar `uniqueId`, which is. After the DB upsert it creates the matching Traccar
 device via REST from the `device_key`, then prints the surrogate `id` to paste
-into the producer's env (e.g. hell-gate-bridge `INGEST_VEHICLE_ID`).
+into the producer's env (e.g. rt-pollers `INGEST_VEHICLE_ID`).
 
 Because `gtfs_rt.py` scans `vehicle:{tracker.id}:*`, the producer MUST publish
 under `tracker_id == <tracker.id>` (the surrogate) for its positions to appear in
@@ -18,12 +18,12 @@ reuses the existing rows and Traccar device rather than duplicating them.
 The final Docker image doesn't include `scripts/` or `uv`, so run this from a
 host checkout against the published ports instead of `docker compose exec`:
 
-    cd cafe-car && uv run python scripts/provision_source.py \\
+    cd rt-api && uv run python scripts/provision_source.py \\
         --feed-name amtrak --static-feed-url https://example.com/amtrak.zip \\
         --nickname "Amtrak NE Regional"
 
 Optional schedule-based trip resolution (not used by producers that post an
-explicit trip_id, e.g. hell-gate-bridge, but used by real Traccar devices):
+explicit trip_id, e.g. rt-pollers, but used by real Traccar devices):
 
     ... --rule mon-fri=08:00-17:00=AMTK123 --rule sat,sun=10:00-14:00=AMTK199
 
@@ -34,7 +34,7 @@ today and are open-ended unless `--rule-start` / `--rule-end` say otherwise.
 The owner defaults to `alice@local`, looked up by `User.primary_email`; that
 `User` row only exists after she has logged into the admin at least once
 (users are created lazily on first authenticated request, one per identity
-provider they've never used before, see `railroad_club.models.identity`).
+provider they've never used before, see `gtfs_zone_db_models.models.identity`).
 """
 
 from __future__ import annotations
@@ -46,15 +46,15 @@ from datetime import date
 
 import httpx
 
-from cafe_car.database import get_session_factory
-from cafe_car.provisioning import (
+from gtfs_zone_rt_api.database import get_session_factory
+from gtfs_zone_rt_api.provisioning import (
     ProvisionError,
     find_owner,
     replace_rules,
     upsert_feed,
     upsert_tracker,
 )
-from cafe_car.traccar import get_traccar_client
+from gtfs_zone_rt_api.traccar import get_traccar_client
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("provision_source")
@@ -121,7 +121,7 @@ async def provision(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Provision a Feed + Tracker (and Traccar device) in cafe-car.",
+        description="Provision a Feed + Tracker (and Traccar device) in rt-api.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(

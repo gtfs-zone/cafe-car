@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import gtfs_zone_db_models.models  # noqa: F401 - registers every table on the metadata
 import pytest
-import railroad_club.models  # noqa: F401 - registers every table on the metadata
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -65,7 +65,7 @@ async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession]:
         await conn.run_sync(SQLModel.metadata.create_all)
         await conn.exec_driver_sql("PRAGMA foreign_keys=ON")
 
-    # expire_on_commit=False mirrors cafe_car.database.get_session_factory: the
+    # expire_on_commit=False mirrors gtfs_zone_rt_api.database.get_session_factory: the
     # code under test reads attributes off objects after committing them.
     async with AsyncSession(engine, expire_on_commit=False) as session:
         yield session

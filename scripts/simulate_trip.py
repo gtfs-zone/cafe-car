@@ -2,15 +2,15 @@
 # /// script
 # dependencies = ["httpx>=0.27"]
 # ///
-"""Simulate a real GTFS trip along its shape, POSTing to cafe-car's ingest API.
+"""Simulate a real GTFS trip along its shape, POSTing to rt-api's ingest API.
 
 The simulation starts at the position the bus would actually be at right now
 according to the GTFS schedule, with a random (or fixed) delay of 5-10 minutes.
 Today's date is used so the trip runs in wall-clock sync when --speed 1 is used.
 
-Positions are POSTed to cafe-car's `/ingest/position` (the direct HTTP ingest
+Positions are POSTed to rt-api's `/ingest/position` (the direct HTTP ingest
 seam), authenticated with a shared bearer token. Each trip reports under
-tracker_id=tracker, trip_id=<trip>, so cafe-car's `vehicle:{tracker}:*` scan
+tracker_id=tracker, trip_id=<trip>, so rt-api's `vehicle:{tracker}:*` scan
 picks it up.
 
 Usage:
@@ -67,7 +67,7 @@ import zoneinfo
 
 import httpx
 
-# The Traccar Client app carries speed in knots; vehicle-poser converts it back to
+# The Traccar Client app carries speed in knots; rt-traccar-receiver converts it back to
 # m/s with this same factor. Used only by --mode device.
 KNOTS_TO_MS = 0.514444
 
@@ -224,7 +224,7 @@ def current_stop_index(schedule_elapsed: float, stop_schedule: list[tuple[int, f
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Simulate a GTFS trip and publish positions + trip-updates to cafe-car ingest."
+        description="Simulate a GTFS trip and publish positions + trip-updates to rt-api ingest."
     )
     parser.add_argument(
         "--gtfs",
@@ -267,14 +267,14 @@ def main() -> int:
         "--mode",
         choices=("ingest", "device"),
         default="ingest",
-        help="ingest: POST explicit trip_id to cafe-car /ingest (default). "
+        help="ingest: POST explicit trip_id to rt-api /ingest (default). "
         "device: emulate the Traccar Client app by posting fixes to Traccar :5055; "
         "the trip is resolved server-side from the tracker's rules (no --trip sent).",
     )
     parser.add_argument(
         "--ingest-url",
         default="http://localhost:8000",
-        help="cafe-car base URL for the ingest API (default: http://localhost:8000)",
+        help="rt-api base URL for the ingest API (default: http://localhost:8000)",
     )
     parser.add_argument(
         "--traccar-url",
@@ -524,8 +524,8 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
 
             # The sim already knows the current stop and its delay, so in ingest
             # mode it emits the trip-update directly rather than leaving
-            # trip-updogger to recompute it. (Device mode sends no trip-update at
-            # all: the fix goes to Traccar and trip-updogger derives the
+            # rt-delay-estimator to recompute it. (Device mode sends no trip-update at
+            # all: the fix goes to Traccar and rt-delay-estimator derives the
             # prediction from it, which is the path a real driver exercises.)
             current_stop = stop_times[stop_idx]
             trip_update_body = {
@@ -545,7 +545,7 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
             try:
                 if args.mode == "device":
                     # Emulate the Traccar Client app: one location fix to :5055.
-                    # No trip_id, vehicle-poser resolves it from the tracker's
+                    # No trip_id, rt-traccar-receiver resolves it from the tracker's
                     # rules. Speed is carried in knots (the app's wire unit).
                     client.post(
                         args.traccar_url,

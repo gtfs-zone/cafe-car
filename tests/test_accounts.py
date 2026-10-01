@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from railroad_club.models.identity import Identity
+from gtfs_zone_db_models.models.identity import Identity
 from sqlalchemy import select
 
-from cafe_car.accounts import (
+from gtfs_zone_rt_api.accounts import (
     link_candidates,
     resolve_login,
     user_with_verified_email,

@@ -5,12 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-from railroad_club.models.feed_invite import FeedInvite
-from railroad_club.models.feed_member import FeedMember
+from gtfs_zone_db_models.models.feed_invite import FeedInvite
+from gtfs_zone_db_models.models.feed_member import FeedMember
 from sqlalchemy import select
 
-from cafe_car.accounts import resolve_login
-from cafe_car.sharing import (
+from gtfs_zone_rt_api.accounts import resolve_login
+from gtfs_zone_rt_api.sharing import (
     claim_invites,
     list_members,
     list_open_invites,

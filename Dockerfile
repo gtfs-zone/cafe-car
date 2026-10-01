@@ -33,4 +33,4 @@ RUN mkdir -p /run/nanomq && chown bridge:bridge /run/nanomq
 
 USER bridge
 
-CMD ["fastapi", "run", "src/cafe_car/main.py", "--port", "8000"]
+CMD ["fastapi", "run", "src/gtfs_zone_rt_api/main.py", "--port", "8000"]

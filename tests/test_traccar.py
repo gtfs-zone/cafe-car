@@ -13,7 +13,7 @@ from collections.abc import Callable
 
 import httpx
 
-from cafe_car.traccar import TraccarClient
+from gtfs_zone_rt_api.traccar import TraccarClient
 
 Handler = Callable[[httpx.Request], httpx.Response]
 Call = tuple[str, str, dict | None]

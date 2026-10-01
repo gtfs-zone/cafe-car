@@ -1,4 +1,4 @@
-"""The yard-master API, end to end over ASGI.
+"""The rt-manager API, end to end over ASGI.
 
 The point of this suite is the negative case. Every read endpoint gets its own
 "a stranger cannot" test, because the endpoints share helpers and a single
@@ -24,13 +24,13 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 import pytest
+from gtfs_zone_db_models.models.feed import Feed
+from gtfs_zone_db_models.models.gtfs_static import GtfsStaticFeed, LoadStatus
+from gtfs_zone_db_models.models.informed_entity import InformedEntity
+from gtfs_zone_db_models.models.service_alert import ServiceAlert
+from gtfs_zone_db_models.models.tracker import Tracker
+from gtfs_zone_db_models.models.tracker_rule import TrackerRule, TrackerRuleException
 from httpx import ASGITransport, AsyncClient
-from railroad_club.models.feed import Feed
-from railroad_club.models.gtfs_static import GtfsStaticFeed, LoadStatus
-from railroad_club.models.informed_entity import InformedEntity
-from railroad_club.models.service_alert import ServiceAlert
-from railroad_club.models.tracker import Tracker
-from railroad_club.models.tracker_rule import TrackerRule, TrackerRuleException
 from sqlalchemy import func, select
 
 from tests.factories import PROVIDER, add_member, make_feed, make_user
@@ -53,13 +53,13 @@ async def client(
     monkeypatch.setenv("SESSION_SECRET_KEY", "test-secret")
     monkeypatch.setenv("OIDC_PROVIDER", PROVIDER)
 
-    import cafe_car.database as database
-    from cafe_car.settings import get_settings
+    import gtfs_zone_rt_api.database as database
+    from gtfs_zone_rt_api.settings import get_settings
 
     get_settings.cache_clear()
     monkeypatch.setattr(database, "_engine", engine)
 
-    from cafe_car.admin_main import create_admin_app
+    from gtfs_zone_rt_api.admin_main import create_admin_app
 
     app = create_admin_app()
     transport = ASGITransport(app=app)
@@ -131,7 +131,7 @@ async def world(session: AsyncSession) -> dict:
 
 # Every mutation carries the CSRF header; `require_csrf` is mounted on the
 # whole router, so a POST without it never reaches a route.
-WRITE = {"X-Yard-Master": "1"}
+WRITE = {"X-RT-Manager": "1"}
 
 OWNER = _headers("kc-owner", "owner@example.com")
 MEMBER = _headers("kc-member", "member@example.com")
@@ -892,7 +892,7 @@ class TestCsrf:
         from fastapi import HTTPException
         from starlette.requests import Request
 
-        from cafe_car.api.deps import require_csrf
+        from gtfs_zone_rt_api.api.deps import require_csrf
 
         scope = {"type": "http", "method": "DELETE", "headers": []}
         with pytest.raises(HTTPException) as excinfo:
@@ -903,7 +903,7 @@ class TestCsrf:
     async def test_a_safe_method_needs_no_header(self, client: AsyncClient) -> None:
         from starlette.requests import Request
 
-        from cafe_car.api.deps import require_csrf
+        from gtfs_zone_rt_api.api.deps import require_csrf
 
         assert (
             await require_csrf(
@@ -924,7 +924,7 @@ class TestCsrf:
 def loads(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     """Records what was queued instead of talking to a broker that is not up."""
     queued: list[int] = []
-    monkeypatch.setattr("cafe_car.api.feeds.request_feed_load", queued.append)
+    monkeypatch.setattr("gtfs_zone_rt_api.api.feeds.request_feed_load", queued.append)
     return queued
 
 
@@ -1092,9 +1092,9 @@ def traccar(monkeypatch: pytest.MonkeyPatch) -> dict[str, list]:
     async def retire(device_key: str) -> None:
         calls["retired"].append(device_key)
 
-    monkeypatch.setattr("cafe_car.api.trackers.provision_device", provision)
-    monkeypatch.setattr("cafe_car.api.trackers.retire_device", retire)
-    monkeypatch.setattr("cafe_car.api.feeds.retire_device", retire)
+    monkeypatch.setattr("gtfs_zone_rt_api.api.trackers.provision_device", provision)
+    monkeypatch.setattr("gtfs_zone_rt_api.api.trackers.retire_device", retire)
+    monkeypatch.setattr("gtfs_zone_rt_api.api.feeds.retire_device", retire)
     return calls
 
 

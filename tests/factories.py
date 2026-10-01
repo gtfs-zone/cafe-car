@@ -9,10 +9,10 @@ from __future__ import annotations
 import itertools
 from typing import TYPE_CHECKING
 
-from railroad_club.models.feed import Feed
-from railroad_club.models.feed_member import FeedMember
-from railroad_club.models.identity import Identity
-from railroad_club.models.user import User
+from gtfs_zone_db_models.models.feed import Feed
+from gtfs_zone_db_models.models.feed_member import FeedMember
+from gtfs_zone_db_models.models.identity import Identity
+from gtfs_zone_db_models.models.user import User
 
 if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession

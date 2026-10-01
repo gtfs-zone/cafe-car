@@ -27,9 +27,9 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from gtfs_zone_db_models.feed_events import feed_channel
+from gtfs_zone_db_models.models.tracker import Tracker
 from httpx import ASGITransport, AsyncClient
-from railroad_club.feed_events import feed_channel
-from railroad_club.models.tracker import Tracker
 
 from tests.factories import PROVIDER, make_feed, make_user
 
@@ -113,13 +113,13 @@ async def make_admin_client(
     monkeypatch.setenv("SESSION_SECRET_KEY", "test-secret")
     monkeypatch.setenv("OIDC_PROVIDER", PROVIDER)
 
-    import cafe_car.database as database
-    from cafe_car.settings import get_settings
+    import gtfs_zone_rt_api.database as database
+    from gtfs_zone_rt_api.settings import get_settings
 
     get_settings.cache_clear()
     monkeypatch.setattr(database, "_engine", engine)
 
-    from cafe_car.admin_main import create_admin_app
+    from gtfs_zone_rt_api.admin_main import create_admin_app
 
     clients: list[AsyncClient] = []
 
@@ -149,13 +149,13 @@ async def make_public_client(
     monkeypatch.setenv("SESSION_SECRET_KEY", "test-secret")
     monkeypatch.setenv("INGEST_API_TOKEN", INGEST_TOKEN)
 
-    import cafe_car.database as database
-    from cafe_car.settings import get_settings
+    import gtfs_zone_rt_api.database as database
+    from gtfs_zone_rt_api.settings import get_settings
 
     get_settings.cache_clear()
     monkeypatch.setattr(database, "_engine", engine)
 
-    from cafe_car.main import create_public_app
+    from gtfs_zone_rt_api.main import create_public_app
 
     clients: list[AsyncClient] = []
 
@@ -427,7 +427,7 @@ class TestPositionPublish:
 
         The serving side only ever reads the `vehicle:{Tracker.id}` namespace, so
         a device_key that was stored verbatim would be written where nothing
-        reads it. This is the shape that broke hell-gate-bridge for five weeks.
+        reads it. This is the shape that broke rt-pollers for five weeks.
         """
         redis = FakeRedis()
         client = await make_public_client(redis)
@@ -465,7 +465,7 @@ class TestPositionPublish:
         redis = FakeRedis()
         client = await make_public_client(redis)
 
-        with caplog.at_level(logging.WARNING, logger="cafe_car.routers.ingest"):
+        with caplog.at_level(logging.WARNING, logger="gtfs_zone_rt_api.routers.ingest"):
             await client.post(
                 "/ingest/position",
                 headers={"Authorization": f"Bearer {INGEST_TOKEN}"},
@@ -526,7 +526,7 @@ class TestPositionPublish:
         redis = FakeRedis()
         client = await make_public_client(redis)
 
-        with caplog.at_level(logging.WARNING, logger="cafe_car.routers.ingest"):
+        with caplog.at_level(logging.WARNING, logger="gtfs_zone_rt_api.routers.ingest"):
             for trip_id in ("T1", "T2"):
                 await client.post(
                     "/ingest/position",
@@ -553,7 +553,7 @@ class TestPositionPublish:
         redis = FakeRedis()
         client = await make_public_client(redis)
 
-        with caplog.at_level(logging.WARNING, logger="cafe_car.routers.ingest"):
+        with caplog.at_level(logging.WARNING, logger="gtfs_zone_rt_api.routers.ingest"):
             for _ in range(2):
                 await client.post(
                     "/ingest/position",
