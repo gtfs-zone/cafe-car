@@ -7,10 +7,8 @@ license = "AGPL-3.0-or-later"
 dependencies = [
     "fastapi[standard]",
     "sqlmodel",
-    # SQLAdmin's own views are gone; `admin/auth.py`'s OIDCAuthBackend still
-    # subclasses sqladmin.authentication.AuthenticationBackend, unused but not
-    # yet removed. Drop this once that class goes too.
-    "sqladmin[full]==0.23.0",
+    # Starlette's SessionMiddleware signs the cookie with it
+    "itsdangerous>=2.2",
     "asyncpg",
     "redis[asyncio]",
     "pydantic-settings",
@@ -19,6 +17,9 @@ dependencies = [
     "httpx",
     "segno",
     "gtfs-zone-db-models",
+    "sqlalchemy>=2",
+    "pydantic>=2",
+    "starlette>=0.52.1",
 ]
 
 [tool.uv.sources]
@@ -32,6 +33,8 @@ dev = [
     "pytest-asyncio",
     "httpx",
     "aiosqlite>=0.22.1",
+    "vulture>=2.16",
+    "deptry>=0.25.1",
 ]
 
 [project.scripts]
@@ -62,6 +65,46 @@ select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "TC", "RUF"]
 # models, so a type-only import there is a NameError, not a saving. TC0xx has
 # to be off for the whole API package rather than silenced per line.
 "src/gtfs_zone_rt_api/api/*.py" = ["TC001", "TC002", "TC003"]
+
+[tool.vulture]
+paths = ["src", "scripts"]
+exclude = ["*/alembic/versions/*"]
+# Used only through a framework: routes, validators, tasks, ORM fields
+ignore_decorators = ["@app.*", "@router.*", "@field_validator", "@model_validator"]
+ignore_names = [
+    "cls",
+    "model_config",
+    # Starlette middleware and http.server handler hooks
+    "dispatch",
+    "do_GET",
+    "log_message",
+    "format",
+    # Response and request model fields, read by pydantic
+    "account_url",
+    "arrival_delay",
+    "arrival_time",
+    "can_manage",
+    "departure_delay",
+    "departure_time",
+    "has_alerts",
+    "has_trip_updates",
+    "has_vehicles",
+    "hosted_url",
+    "is_current",
+    "is_owner",
+    "load",
+    "owner_name",
+    "service_alerts_url",
+    "static_url",
+    "trip_updates_url",
+    "vehicle_positions_url",
+]
+
+[tool.deptry]
+per_rule_ignores.DEP002 = [
+    "asyncpg",  # SQLAlchemy driver, loaded from the database URL
+    "itsdangerous",  # imported by Starlette's SessionMiddleware
+]
 
 [tool.commitizen]
 name = "cz_conventional_commits"

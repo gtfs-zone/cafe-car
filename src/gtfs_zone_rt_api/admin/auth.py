@@ -3,18 +3,15 @@ import json
 import logging
 
 from gtfs_zone_db_models.models.identity import Identity
-from sqladmin.authentication import AuthenticationBackend
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
-from starlette.responses import RedirectResponse
 
 from gtfs_zone_rt_api.accounts import resolve_login
 from gtfs_zone_rt_api.admin.context import (
     current_user_id_var,
     current_user_is_admin_var,
 )
-from gtfs_zone_rt_api.database import get_session_factory
 from gtfs_zone_rt_api.settings import get_settings
 from gtfs_zone_rt_api.sharing import claim_invites
 
@@ -81,11 +78,9 @@ def claims_are_admin(claims: dict) -> bool:
 def request_is_admin(request: Request) -> bool:
     """Whether this caller is an admin, answered from the token every time.
 
-    Both the SQLAdmin views (through `OIDCAuthBackend.authenticate`) and the
-    hand-written routes in `entity_router` come through here, so "who is an
-    admin" has one definition and the two cannot drift. In particular it does
-    not consult the session: a cookie is not evidence of group membership, and
-    routes outside SQLAdmin may see a stale one or none at all.
+    The hand-written routes in `entity_router` come through here, so "who is an
+    admin" has one definition. It does not consult the session: a cookie is not
+    evidence of group membership, and a route may see a stale one or none at all.
     """
     return claims_are_admin(verified_claims(request))
 
@@ -199,27 +194,3 @@ async def ensure_identity(request: Request, session: AsyncSession) -> int:
     if prior.get("user_id") == user.id and prior.get("link_dismissed"):
         request.session["link_dismissed"] = prior["link_dismissed"]
     return user.id
-
-
-class OIDCAuthBackend(AuthenticationBackend):
-    async def login(self, request: Request) -> bool:
-        return True  # Traefik/oauth2-proxy handles login redirect
-
-    async def logout(self, request: Request) -> RedirectResponse:
-        request.session.clear()
-        logout_url = get_settings().oauth2_proxy_logout_url
-        return RedirectResponse(url=logout_url)
-
-    async def authenticate(self, request: Request) -> bool:
-        subject = request_subject(request)
-        if not subject:
-            log.warning("authenticate: no subject header for path=%s", request.url.path)
-            return False
-        try:
-            factory = get_session_factory()
-            async with factory() as session:
-                user_id = await ensure_identity(request, session)
-        except Exception:
-            log.exception("authenticate: DB error for subject=%s", subject)
-            raise
-        return bool(user_id)

@@ -15,7 +15,6 @@ from __future__ import annotations
 import logging
 import time
 from functools import lru_cache
-from typing import Any
 
 import httpx
 
@@ -81,22 +80,6 @@ class KeycloakClient:
         async with self._client() as client:
             return await client.get(path, headers={"Authorization": f"Bearer {token}"})
 
-    async def federated_identities(self, subject: str) -> list[dict[str, Any]]:
-        """The upstream providers linked to a realm account.
-
-        Entries carry ``identityProvider`` (the broker alias), ``userId`` and
-        ``userName`` (the identifiers upstream). Returns ``[]`` for a subject
-        Keycloak no longer has, which the caller distinguishes from "no links"
-        via :meth:`user_exists`.
-        """
-        resp = await self._get(
-            f"/admin/realms/{self._realm}/users/{subject}/federated-identity"
-        )
-        if resp.status_code == 404:
-            return []
-        resp.raise_for_status()
-        return resp.json()
-
     async def subject_for_username(self, username: str) -> str | None:
         """The realm account's subject, or None when the realm has no such user.
 
@@ -112,18 +95,6 @@ class KeycloakClient:
         if not users:
             return None
         return str(users[0]["id"])
-
-    async def user_exists(self, subject: str) -> bool:
-        """Whether the realm still has this account.
-
-        A merged-away or deleted account leaves its `Identity` row behind, and
-        nothing else can tell that row apart from a live one.
-        """
-        resp = await self._get(f"/admin/realms/{self._realm}/users/{subject}")
-        if resp.status_code == 404:
-            return False
-        resp.raise_for_status()
-        return True
 
 
 @lru_cache

@@ -2,14 +2,13 @@
 
 The path shapes are declared by ``routers/gtfs_rt.py`` and
 ``routers/static_feed.py``; this is the one place that spells them out as
-URLs. Every consumer (the admin UI's viz deep link in ``admin/links.py``, the
-public feed catalog in ``routers/catalog.py`` and the API's ``FeedOut``) comes
-through here, so a renamed route breaks in one place rather than four.
+URLs. Every consumer (the public feed catalog in ``routers/catalog.py`` and the
+API's ``FeedOut``) comes through here, so a renamed route breaks in one place
+rather than three.
 
-``PUBLIC_RT_BASE`` is hardcoded to prod for the same reason the frontend bases
-are (see ``admin/links.py``): a feed created locally will not exist in prod, and
-that is an accepted trade-off against keeping deploy-specific config out of the
-response body.
+``PUBLIC_RT_BASE`` is hardcoded to prod: a feed created locally will not exist
+in prod, and that is an accepted trade-off against keeping deploy-specific
+config out of the response body.
 """
 
 from __future__ import annotations

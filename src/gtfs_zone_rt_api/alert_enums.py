@@ -11,7 +11,7 @@ what the admin has always shown.
 
 from __future__ import annotations
 
-from typing import Literal, get_args
+from typing import Literal
 
 AlertCause = Literal[
     "UNKNOWN_CAUSE",
@@ -42,7 +42,3 @@ AlertEffect = Literal[
     "ACCESSIBILITY_ISSUE",
 ]
 AlertSeverity = Literal["UNKNOWN_SEVERITY", "INFO", "WARNING", "SEVERE"]
-
-ALERT_CAUSES: tuple[str, ...] = get_args(AlertCause)
-ALERT_EFFECTS: tuple[str, ...] = get_args(AlertEffect)
-ALERT_SEVERITIES: tuple[str, ...] = get_args(AlertSeverity)

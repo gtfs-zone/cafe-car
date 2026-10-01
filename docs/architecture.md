@@ -34,8 +34,7 @@ is the fast, read-only lookup every request goes through first; when a
 subject has no `Identity` row yet, `ensure_identity` (same file) creates one,
 claims any invites waiting on its verified email, and primes the session : 
 the provisioning that `OIDCAuthBackend.authenticate` used to do before
-SQLAdmin was removed. `OIDCAuthBackend` itself is unused now but not yet
-deleted; see the note on the `sqladmin` pin in `pyproject.toml`.
+SQLAdmin was removed.
 
 `admin/entity_router.py` holds hand-written routes (sharing, account linking,
 and some htmx partials left from the retired SQLAdmin pages). Nothing runs

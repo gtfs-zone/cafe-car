@@ -16,7 +16,6 @@ class Settings(BaseSettings):
     # full.path=false, so this is the bare group name and not "/gtfs-admins".
     # The same group gates Traccar entirely (openid.allowGroup there).
     admin_group: str = "gtfs-admins"
-    oauth2_proxy_logout_url: str = "/oauth2/sign_out"
     # Keycloak's self-serve Account Console, where a signed-in person adds
     # another provider. Keycloak owns linking, so it is also where linking is
     # undone. Empty hides the link.
