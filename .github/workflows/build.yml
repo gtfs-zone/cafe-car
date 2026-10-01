@@ -1,6 +1,6 @@
 name: Build
 
-# Lints and tests, then builds the image and pushes it to
+# Runs the check workflow, then builds the image and pushes it to
 # ghcr.io/<owner>/<repo> tagged with the short SHA, latest, and the tag on v*.
 
 on:
@@ -11,7 +11,13 @@ on:
       - 'v*'
 
 jobs:
+  check:
+    uses: ./.github/workflows/check.yml
+    permissions:
+      contents: read
+
   build:
+    needs: check
     runs-on: ubuntu-latest
 
     permissions:
@@ -23,26 +29,6 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-
-      # uv fetches its own interpreter when the runner's python does not match
-      # requires-python.
-      - name: Install project
-        run: uv sync --frozen
-
-      - name: Lint
-        run: uv run ruff check .
-
-      # Not every repo has a test suite yet.
-      - name: Test
-        run: |
-          if [ -d tests ]; then
-            uv run pytest
-          else
-            echo "no tests/ directory, skipping"
-          fi
 
       - name: Image tags
         id: tags

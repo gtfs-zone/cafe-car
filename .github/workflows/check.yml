@@ -1,16 +1,40 @@
 name: Check
 
-# On a pull request: reject any commit whose message is not a Conventional
-# Commit. The commit-msg hook does the same locally but can be skipped.
+# On a push to a branch or a pull request: runs scripts/check.sh. On a pull
+# request it also rejects any commit whose message is not a Conventional
+# Commit; the commit-msg hook does the same locally but can be skipped. Deploy
+# workflows call this workflow before they build.
 
 on:
+  push:
+    branches:
+      - '**'
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      # uv fetches its own interpreter when the runner's python does not match
+      # requires-python.
+      - name: Check
+        run: scripts/check.sh
+
   commits:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
 
     steps:
