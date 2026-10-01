@@ -56,7 +56,9 @@ def print_summary(msg: gtfs_realtime_pb2.FeedMessage) -> None:
         print("No vehicle entities found.")
         return
 
-    print(f"{'ID':<20} {'Label':<15} {'Trip':<20} {'Route':<15} {'Lat':>10} {'Lon':>11} {'Bear':>6} {'Speed':>7} {'Status':<15}")
+    print(
+        f"{'ID':<20} {'Label':<15} {'Trip':<20} {'Route':<15} {'Lat':>10} {'Lon':>11} {'Bear':>6} {'Speed':>7} {'Status':<15}"
+    )
     print("-" * 120)
     for e in vehicles:
         v = e.vehicle

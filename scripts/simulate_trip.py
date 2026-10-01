@@ -112,7 +112,10 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    a = (
+        math.sin(dphi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    )
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
@@ -121,7 +124,9 @@ def compass_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dlambda = math.radians(lon2 - lon1)
     x = math.sin(dlambda) * math.cos(phi2)
-    y = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(dlambda)
+    y = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(
+        dlambda
+    )
     return (math.degrees(math.atan2(x, y)) + 360) % 360
 
 
@@ -130,7 +135,9 @@ def compass_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float
 # ---------------------------------------------------------------------------
 
 
-def build_shape(shape_rows: list[dict]) -> tuple[list[tuple[float, float]], list[float]]:
+def build_shape(
+    shape_rows: list[dict],
+) -> tuple[list[tuple[float, float]], list[float]]:
     """Return (points, cumulative_distances_m) sorted by sequence."""
     pts = sorted(shape_rows, key=lambda r: int(r["shape_pt_sequence"]))
     points = [(float(r["shape_pt_lat"]), float(r["shape_pt_lon"])) for r in pts]
@@ -160,7 +167,6 @@ def position_at_dist(
     return lat, lon, brg
 
 
-
 # ---------------------------------------------------------------------------
 # Schedule helpers
 # ---------------------------------------------------------------------------
@@ -186,7 +192,9 @@ def map_stops_to_shape(
     return result
 
 
-def shape_dist_at(schedule_elapsed: float, stop_schedule: list[tuple[int, float]]) -> float:
+def shape_dist_at(
+    schedule_elapsed: float, stop_schedule: list[tuple[int, float]]
+) -> float:
     """Shape distance (m) given seconds elapsed since first stop departure."""
     first_t = stop_schedule[0][0]
     t = first_t + schedule_elapsed
@@ -206,7 +214,9 @@ def shape_dist_at(schedule_elapsed: float, stop_schedule: list[tuple[int, float]
     return stop_schedule[-1][1]
 
 
-def current_stop_index(schedule_elapsed: float, stop_schedule: list[tuple[int, float]]) -> int:
+def current_stop_index(
+    schedule_elapsed: float, stop_schedule: list[tuple[int, float]]
+) -> int:
     """Index of the last stop the bus has reached or passed."""
     first_t = stop_schedule[0][0]
     t = first_t + schedule_elapsed
@@ -360,9 +370,15 @@ def main() -> int:
         trips = gtfs["trips"]
         if args.route:
             trips = [t for t in trips if t["route_id"] in args.route]
-        print(f"Trips in {args.gtfs}" + (f" (route: {', '.join(args.route)})" if args.route else "") + ":")
+        print(
+            f"Trips in {args.gtfs}"
+            + (f" (route: {', '.join(args.route)})" if args.route else "")
+            + ":"
+        )
         for t in trips:
-            n_stops = sum(1 for st in gtfs["stop_times"] if st["trip_id"] == t["trip_id"])
+            n_stops = sum(
+                1 for st in gtfs["stop_times"] if st["trip_id"] == t["trip_id"]
+            )
             stop_times_for_trip = sorted(
                 [st for st in gtfs["stop_times"] if st["trip_id"] == t["trip_id"]],
                 key=lambda r: int(r["stop_sequence"]),
@@ -396,7 +412,9 @@ def main() -> int:
     # Validate all IDs
     unknown = trip_ids - trips_by_id.keys()
     if unknown:
-        print(f"Error: unknown trip IDs: {', '.join(sorted(unknown))}. Use --list-trips to see available trips.")
+        print(
+            f"Error: unknown trip IDs: {', '.join(sorted(unknown))}. Use --list-trips to see available trips."
+        )
         return 1
 
     if args.override_trip_id and len(trip_ids) > 1:
@@ -451,21 +469,39 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
         return
 
     # Build schedule: (absolute_seconds, shape_dist_m)
-    stop_schedule = map_stops_to_shape(stop_times, gtfs["stops"], shape_points, shape_dists)
+    stop_schedule = map_stops_to_shape(
+        stop_times, gtfs["stops"], shape_points, shape_dists
+    )
     trip_duration = stop_schedule[-1][0] - stop_schedule[0][0]
 
-    gtfs_label = f"{trip_id} → {published_trip_id}" if published_trip_id != trip_id else trip_id
+    gtfs_label = (
+        f"{trip_id} → {published_trip_id}" if published_trip_id != trip_id else trip_id
+    )
     print(f"{prefix} Trip:       {gtfs_label}  (route {route_id})")
-    print(f"{prefix} Shape:      {shape_id}  ({len(shape_points)} pts, {shape_dists[-1] / 1000:.1f} km)")
+    print(
+        f"{prefix} Shape:      {shape_id}  ({len(shape_points)} pts, {shape_dists[-1] / 1000:.1f} km)"
+    )
     print(f"{prefix} Stops:      {len(stop_times)}")
-    print(f"{prefix} Schedule:   {stop_times[0]['departure_time']} → {stop_times[-1]['arrival_time']}")
-    print(f"{prefix} Duration:   {trip_duration // 60:.0f} min  ({trip_duration}s scheduled)")
-    print(f"{prefix} Delay:      {args.min_delay:.0f}-{args.max_delay:.0f}s (random walk, drift ±{args.delay_drift:.0f}s/tick, starting {delay_seconds:.0f}s)")
-    print(f"{prefix} Speed:      {args.speed}x  →  real runtime ≈ {trip_duration / args.speed / 60:.1f} min")
+    print(
+        f"{prefix} Schedule:   {stop_times[0]['departure_time']} → {stop_times[-1]['arrival_time']}"
+    )
+    print(
+        f"{prefix} Duration:   {trip_duration // 60:.0f} min  ({trip_duration}s scheduled)"
+    )
+    print(
+        f"{prefix} Delay:      {args.min_delay:.0f}-{args.max_delay:.0f}s (random walk, drift ±{args.delay_drift:.0f}s/tick, starting {delay_seconds:.0f}s)"
+    )
+    print(
+        f"{prefix} Speed:      {args.speed}x  →  real runtime ≈ {trip_duration / args.speed / 60:.1f} min"
+    )
     if args.mode == "device":
-        print(f"{prefix} Device:     {args.traccar_url}?id={args.tracker}  (trip resolved server-side from rules)")
+        print(
+            f"{prefix} Device:     {args.traccar_url}?id={args.tracker}  (trip resolved server-side from rules)"
+        )
     else:
-        print(f"{prefix} Ingest:     {args.ingest_url}/ingest/position  tracker_id={args.tracker}  trip_id={published_trip_id}")
+        print(
+            f"{prefix} Ingest:     {args.ingest_url}/ingest/position  tracker_id={args.tracker}  trip_id={published_trip_id}"
+        )
     print()
 
     position_url = f"{args.ingest_url.rstrip('/')}/ingest/position"
@@ -480,7 +516,11 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
 
     real_start = time.time()
     tz = zoneinfo.ZoneInfo(gtfs["agency_timezone"])
-    today_midnight = int(datetime.datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    today_midnight = int(
+        datetime.datetime.now(tz)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .timestamp()
+    )
 
     try:
         while True:
@@ -509,7 +549,9 @@ def run_trip(trip_id: str, gtfs: dict, args: argparse.Namespace) -> None:
             if args.real_time:
                 tst = int(time.time())
             else:
-                tst = today_midnight + int(stop_schedule[0][0] + schedule_elapsed + delay_seconds)
+                tst = today_midnight + int(
+                    stop_schedule[0][0] + schedule_elapsed + delay_seconds
+                )
 
             body = {
                 "tracker_id": args.tracker,

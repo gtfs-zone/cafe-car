@@ -904,11 +904,14 @@ def run_map(args) -> None:
     if args.gtfs:
         try:
             _route_names.update(load_route_names(args.gtfs))
-            print(f"Loaded {len(_route_names)} route names from {args.gtfs}",
-                  file=sys.stderr)
+            print(
+                f"Loaded {len(_route_names)} route names from {args.gtfs}",
+                file=sys.stderr,
+            )
         except Exception as exc:
-            print(f"WARN: could not load routes from {args.gtfs}: {exc}",
-                  file=sys.stderr)
+            print(
+                f"WARN: could not load routes from {args.gtfs}: {exc}", file=sys.stderr
+            )
 
     server = HTTPServer(("localhost", args.map_port), MapHandler)
     t = threading.Thread(target=server.serve_forever, daemon=True)
@@ -938,43 +941,80 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("feed", help="Feed name (e.g. 'my-feed')")
 
     feeds = p.add_argument_group("feed toggles (all enabled by default)")
-    feeds.add_argument("--no-trip-updates", dest="trip_updates", action="store_false",
-                       help="Skip trip updates")
-    feeds.add_argument("--no-vehicles", dest="vehicles", action="store_false",
-                       help="Skip vehicle positions")
     feeds.add_argument(
-        "--no-service-alerts", dest="service_alerts", action="store_false",
+        "--no-trip-updates",
+        dest="trip_updates",
+        action="store_false",
+        help="Skip trip updates",
+    )
+    feeds.add_argument(
+        "--no-vehicles",
+        dest="vehicles",
+        action="store_false",
+        help="Skip vehicle positions",
+    )
+    feeds.add_argument(
+        "--no-service-alerts",
+        dest="service_alerts",
+        action="store_false",
         help="Skip service alerts",
     )
 
     output = p.add_argument_group("output")
-    output.add_argument("--summary", action="store_true",
-                        help="Compact table output (default: full)")
-    output.add_argument("--verbose", action="store_true",
-                        help="Also print raw JSON")
+    output.add_argument(
+        "--summary", action="store_true", help="Compact table output (default: full)"
+    )
+    output.add_argument("--verbose", action="store_true", help="Also print raw JSON")
 
     follow = p.add_argument_group("follow mode")
-    follow.add_argument("-f", "--follow", action="store_true",
-                        help="Poll continuously")
-    follow.add_argument("--interval", type=float, default=2,
-                        metavar="N", help="Seconds between polls (default: 2)")
-    follow.add_argument("--no-clear", dest="clear", action="store_false",
-                        help="Don't clear terminal between polls")
-    follow.add_argument("--timeout", type=int, default=10,
-                        metavar="N", help="HTTP timeout in seconds (default: 10)")
+    follow.add_argument("-f", "--follow", action="store_true", help="Poll continuously")
+    follow.add_argument(
+        "--interval",
+        type=float,
+        default=2,
+        metavar="N",
+        help="Seconds between polls (default: 2)",
+    )
+    follow.add_argument(
+        "--no-clear",
+        dest="clear",
+        action="store_false",
+        help="Don't clear terminal between polls",
+    )
+    follow.add_argument(
+        "--timeout",
+        type=int,
+        default=10,
+        metavar="N",
+        help="HTTP timeout in seconds (default: 10)",
+    )
 
     mapg = p.add_argument_group("map")
-    mapg.add_argument("--browser", action="store_true",
-                      help="Host a Leaflet map at http://localhost:<map-port>")
-    mapg.add_argument("--map-port", type=int, default=8765,
-                      metavar="N", help="Port for map server (default: 8765)")
-    mapg.add_argument("--gtfs", metavar="PATH_OR_URL",
-                      help="GTFS zip (local path or http URL) to resolve "
-                           "route_id → route name in map popups")
+    mapg.add_argument(
+        "--browser",
+        action="store_true",
+        help="Host a Leaflet map at http://localhost:<map-port>",
+    )
+    mapg.add_argument(
+        "--map-port",
+        type=int,
+        default=8765,
+        metavar="N",
+        help="Port for map server (default: 8765)",
+    )
+    mapg.add_argument(
+        "--gtfs",
+        metavar="PATH_OR_URL",
+        help="GTFS zip (local path or http URL) to resolve "
+        "route_id → route name in map popups",
+    )
 
     conn = p.add_argument_group("connection")
-    conn.add_argument("--backend", default="http://localhost:8000",
-                      help="Base URL (default: http://localhost:8000)")
+    conn.add_argument(
+        "--backend",
+        default="http://localhost:8000",
+        help="Base URL (default: http://localhost:8000)",
+    )
 
     p.set_defaults(trip_updates=True, vehicles=True, service_alerts=True, clear=True)
     return p

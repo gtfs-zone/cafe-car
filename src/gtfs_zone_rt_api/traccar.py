@@ -231,6 +231,4 @@ async def retire_device(device_key: str) -> None:
         await get_traccar_client().delete_device(device_key)
     except Exception:
         # No device_key in the message: this lands in logs.
-        log.warning(
-            "could not retire the Traccar device for a tracker", exc_info=True
-        )
+        log.warning("could not retire the Traccar device for a tracker", exc_info=True)

@@ -75,7 +75,9 @@ def print_summary(msg: gtfs_realtime_pb2.FeedMessage) -> None:
         print("No trip_update entities found.")
         return
 
-    print(f"{'Trip ID':<25} {'Route':<12} {'Vehicle':<15} {'Stops':>5} {'Next Stop':<20} {'Arr':>9} {'Dep':>9} {'Delay':>7} {'Sched Rel':<14}")
+    print(
+        f"{'Trip ID':<25} {'Route':<12} {'Vehicle':<15} {'Stops':>5} {'Next Stop':<20} {'Arr':>9} {'Dep':>9} {'Delay':>7} {'Sched Rel':<14}"
+    )
     print("-" * 125)
     for e in updates:
         tu = e.trip_update
@@ -88,10 +90,16 @@ def print_summary(msg: gtfs_realtime_pb2.FeedMessage) -> None:
             next_stu = tu.stop_time_update[0]
             next_stop = next_stu.stop_id or "-"
             arr = fmt_ts(next_stu.arrival.time) if next_stu.HasField("arrival") else "-"
-            dep = fmt_ts(next_stu.departure.time) if next_stu.HasField("departure") else "-"
+            dep = (
+                fmt_ts(next_stu.departure.time)
+                if next_stu.HasField("departure")
+                else "-"
+            )
             delay_val = (
-                next_stu.arrival.delay if next_stu.HasField("arrival")
-                else next_stu.departure.delay if next_stu.HasField("departure")
+                next_stu.arrival.delay
+                if next_stu.HasField("arrival")
+                else next_stu.departure.delay
+                if next_stu.HasField("departure")
                 else 0
             )
             delay = fmt_delay(delay_val) if delay_val != 0 else "-"
@@ -99,7 +107,9 @@ def print_summary(msg: gtfs_realtime_pb2.FeedMessage) -> None:
             next_stop = arr = dep = "-"
             delay = fmt_delay(tu.delay) if tu.delay != 0 else "-"
 
-        sched_rel = SCHEDULE_RELATIONSHIP.get(tu.trip.schedule_relationship, str(tu.trip.schedule_relationship))
+        sched_rel = SCHEDULE_RELATIONSHIP.get(
+            tu.trip.schedule_relationship, str(tu.trip.schedule_relationship)
+        )
 
         print(
             f"{trip_id:<25} "
@@ -123,17 +133,31 @@ def print_full(msg: gtfs_realtime_pb2.FeedMessage) -> None:
         tu = e.trip_update
         trip_id = tu.trip.trip_id or "-"
         route_id = tu.trip.route_id or "-"
-        sched_rel = SCHEDULE_RELATIONSHIP.get(tu.trip.schedule_relationship, str(tu.trip.schedule_relationship))
+        sched_rel = SCHEDULE_RELATIONSHIP.get(
+            tu.trip.schedule_relationship, str(tu.trip.schedule_relationship)
+        )
         print(f"=== Trip: {trip_id}  Route: {route_id}  [{sched_rel}] ===")
         if tu.HasField("vehicle"):
             print(f"  Vehicle: {tu.vehicle.id}")
         if tu.delay != 0:
             print(f"  Delay (top-level): {fmt_delay(tu.delay)}")
         for stu in tu.stop_time_update:
-            stop_sched_rel = STOP_SCHEDULE_RELATIONSHIP.get(stu.schedule_relationship, str(stu.schedule_relationship))
-            arr = f"arr={fmt_ts(stu.arrival.time)} delay={fmt_delay(stu.arrival.delay)}" if stu.HasField("arrival") else "arr=-"
-            dep = f"dep={fmt_ts(stu.departure.time)} delay={fmt_delay(stu.departure.delay)}" if stu.HasField("departure") else "dep=-"
-            print(f"  stop={stu.stop_id:<20} seq={stu.stop_sequence:<5} {arr:<35} {dep:<35} [{stop_sched_rel}]")
+            stop_sched_rel = STOP_SCHEDULE_RELATIONSHIP.get(
+                stu.schedule_relationship, str(stu.schedule_relationship)
+            )
+            arr = (
+                f"arr={fmt_ts(stu.arrival.time)} delay={fmt_delay(stu.arrival.delay)}"
+                if stu.HasField("arrival")
+                else "arr=-"
+            )
+            dep = (
+                f"dep={fmt_ts(stu.departure.time)} delay={fmt_delay(stu.departure.delay)}"
+                if stu.HasField("departure")
+                else "dep=-"
+            )
+            print(
+                f"  stop={stu.stop_id:<20} seq={stu.stop_sequence:<5} {arr:<35} {dep:<35} [{stop_sched_rel}]"
+            )
         print()
 
 

@@ -26,9 +26,7 @@ def to_utc(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
-def active_alerts(
-    alerts: Iterable[ServiceAlert], now: datetime
-) -> list[ServiceAlert]:
+def active_alerts(alerts: Iterable[ServiceAlert], now: datetime) -> list[ServiceAlert]:
     """Alerts inside their active period that name at least one informed entity.
 
     An alert with no informed entities selects nothing, so it is dropped rather

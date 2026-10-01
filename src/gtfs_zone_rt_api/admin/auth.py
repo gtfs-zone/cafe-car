@@ -213,9 +213,7 @@ class OIDCAuthBackend(AuthenticationBackend):
     async def authenticate(self, request: Request) -> bool:
         subject = request_subject(request)
         if not subject:
-            log.warning(
-                "authenticate: no subject header for path=%s", request.url.path
-            )
+            log.warning("authenticate: no subject header for path=%s", request.url.path)
             return False
         try:
             factory = get_session_factory()

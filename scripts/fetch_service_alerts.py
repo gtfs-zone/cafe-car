@@ -91,7 +91,11 @@ def print_full(msg: gtfs_realtime_pb2.FeedMessage) -> None:
         effect = EFFECT_NAMES.get(a.effect, str(a.effect))
         severity = SEVERITY_NAMES.get(a.severity_level, str(a.severity_level))
         header = a.header_text.translation[0].text if a.header_text.translation else "-"
-        desc = a.description_text.translation[0].text if a.description_text.translation else "-"
+        desc = (
+            a.description_text.translation[0].text
+            if a.description_text.translation
+            else "-"
+        )
         url = a.url.translation[0].text if a.url.translation else "-"
 
         print(f"=== Alert ID: {e.id} ===")

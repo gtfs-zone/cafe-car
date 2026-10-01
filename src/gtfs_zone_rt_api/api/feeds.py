@@ -276,9 +276,7 @@ async def feed_schedule_zip(
     if feed.source_kind == FeedSourceKind.hosted:
         upload = await _current_upload(session, feed)
         if upload is None:
-            raise HTTPException(
-                status_code=404, detail="This feed has no schedule yet"
-            )
+            raise HTTPException(status_code=404, detail="This feed has no schedule yet")
         headers = upload_headers(upload)
         if not_modified(request, upload):
             return Response(status_code=304, headers=headers)

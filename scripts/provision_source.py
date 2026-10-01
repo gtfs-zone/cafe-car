@@ -60,7 +60,6 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("provision_source")
 
 
-
 async def provision(args: argparse.Namespace) -> int:
     factory = get_session_factory()
 
