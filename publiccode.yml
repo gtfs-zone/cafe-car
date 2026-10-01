@@ -1,0 +1,46 @@
+publiccodeYmlVersion: "0.4"
+
+name: GTFS.zone RT API
+url: "https://github.com/gtfs-zone/gtfs-zone-rt-api"
+landingURL: "https://rt.gtfs.zone"
+
+platforms:
+  - linux
+
+categories:
+  - fleet-management
+  - data-collection
+
+developmentStatus: beta
+
+softwareType: "standalone/backend"
+
+description:
+  en:
+    shortDescription: >
+      The core gtfs.zone API: serves GTFS Realtime feeds and the JSON API for managing feeds, trackers and alerts.
+    longDescription: >
+      GTFS.zone RT API serves GTFS Realtime vehicle position, trip update
+      and service alert feeds built from positions in Redis and schedules in
+      PostgreSQL. It also provides the authenticated JSON API that
+      gtfs-zone-rt-manager uses to manage feeds, trackers and service alerts,
+      and an ingest API that upstream pollers post positions and trip updates
+      to. It has no UI of its own.
+    features:
+      - GTFS Realtime vehicle position, trip update and alert feeds
+      - JSON API for feeds, trackers and service alerts
+      - Batch ingest API for positions and trip updates
+
+legal:
+  license: AGPL-3.0-or-later
+
+maintenance:
+  type: community
+  contacts:
+    - name: Max Katz-Christy
+      email: maxkatzchristy@gmail.com
+
+localisation:
+  localisationReady: false
+  availableLanguages:
+    - en
